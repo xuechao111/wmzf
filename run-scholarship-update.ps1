@@ -1,12 +1,14 @@
 ﻿param([Parameter(Mandatory=$true)][string]$InputFile)
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = $env:HF_DASHBOARD_ROOT
+if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 $statusFile = Join-Path $root 'scholarship-status.json'
 $lockFile = Join-Path $root 'scholarship-update.lock'
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if ([string]::IsNullOrWhiteSpace($node)) { $node = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' }
-$script = Join-Path $root 'sync-renewal-table.mjs'
+$script = Join-Path $sourceRoot 'sync-renewal-table.mjs'
 $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 
 function Write-ScholarshipStatus($state, $message, $detail = '') {

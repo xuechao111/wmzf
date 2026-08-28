@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 
-const DASHBOARD_CONFIG=path.join(path.dirname(fileURLToPath(import.meta.url)),"dashboard-config.json");
+const DASHBOARD_CONFIG=path.join(process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url)),"dashboard-config.json");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
 const WORKBOOK = DASHBOARD_SETTINGS.renewalWorkbookUrl || "";
 const SHEET_ID = DASHBOARD_SETTINGS.renewalSheetId || "";

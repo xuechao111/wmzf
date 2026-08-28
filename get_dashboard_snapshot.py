@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import run_dashboard_update as core
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
 OUT = ROOT / "dashboard-snapshot.json"
 RAW = ROOT / "run-data" / "group-lessons-raw.json"
 CN = timezone(timedelta(hours=8))

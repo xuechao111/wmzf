@@ -2,7 +2,7 @@ if(!globalThis.__codemaoDashboardBridgeInstalled){
   globalThis.__codemaoDashboardBridgeInstalled=true;
   window.postMessage({source:"codemao-crm-extension",type:"ready"},"*");
   window.addEventListener("message",event=>{
-    const message=event.data;
+    const message={...event.data,localBase:location.origin};
     if(event.source!==window||message?.source!=="codemao-dashboard"||!message.id)return;
     const relay=(attempt=0)=>chrome.runtime.sendMessage(message,response=>{
       const runtimeError=chrome.runtime.lastError?.message;

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
 GROUP = ROOT / "run-data" / "group-dashboard-tables.json"
 EXCEPTION = ROOT / "run-data" / "exception-export-tables.json"
 SNAPSHOT = ROOT / "dashboard-snapshot.json"

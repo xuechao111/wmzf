@@ -1,0 +1,13 @@
+{
+  "displayTitle": "教学数据测试工作台",
+  "displaySubtitle": "独立测试环境 · 不连接正式钉钉表格",
+  "workbookUrl": "",
+  "dingtalkConnectionUrl": "",
+  "dingtalkAccessKey": "",
+  "renewalWorkbookUrl": "",
+  "renewalSheetId": "",
+  "classes": [],
+  "excludedTeachers": ["薛超"],
+  "shareEnabled": false,
+  "shareTitle": "教学数据测试看板"
+}

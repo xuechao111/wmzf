@@ -1,12 +1,14 @@
 ﻿param([Parameter(Mandatory=$true)][string]$InputFile)
 $ErrorActionPreference='Stop'
-$root=Split-Path -Parent $MyInvocation.MyCommand.Path
+$sourceRoot=Split-Path -Parent $MyInvocation.MyCommand.Path
+$root=$env:HF_DASHBOARD_ROOT
+if([string]::IsNullOrWhiteSpace($root)){$root=$sourceRoot}
 $statusFile=Join-Path $root 'service-status.json'
 $outputFile=Join-Path $root 'service-data.json'
 $lockFile=Join-Path $root 'service-update.lock'
 $node=(Get-Command node -ErrorAction SilentlyContinue).Source
 if([string]::IsNullOrWhiteSpace($node)){$node='C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'}
-$script=Join-Path $root 'sync-service-data.mjs'
+$script=Join-Path $sourceRoot 'sync-service-data.mjs'
 $startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 function Write-ServiceStatus($state,$message,$detail=''){$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss';$lastSuccess='';if(Test-Path $statusFile){try{$oldStatus=Get-Content $statusFile -Raw -Encoding UTF8|ConvertFrom-Json;$lastSuccess=[string]$oldStatus.lastSuccessTime;if(!$lastSuccess-and $oldStatus.state-eq'success'){$lastSuccess=[string]$oldStatus.time}}catch{}};if($state-eq'success'){$lastSuccess=$now};$json=[ordered]@{state=$state;message=$message;detail=$detail;time=$now;startedAt=$startedAt;lastSuccessTime=$lastSuccess}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($statusFile,$json,[Text.Encoding]::UTF8)}
 $lock=$null

@@ -1,11 +1,13 @@
 ﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Web
 
-$port = 8765
+$port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8765 }
+$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $env:HF_DASHBOARD_ROOT
-if ([string]::IsNullOrWhiteSpace($root)) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
-$indexFile = Join-Path $root 'index.html'
-$viewFile = Join-Path $root 'view.html'
+if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
+if (-not (Test-Path -LiteralPath $root)) { [void](New-Item -ItemType Directory -Path $root -Force) }
+$indexFile = Join-Path $sourceRoot 'index.html'
+$viewFile = Join-Path $sourceRoot 'view.html'
 $shareConfigFile = Join-Path $root 'share-config.json'
 $dashboardConfigFile = Join-Path $root 'dashboard-config.json'
 $dashboardUrl = 'https://alidocs.dingtalk.com/'
@@ -15,11 +17,12 @@ $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if ([string]::IsNullOrWhiteSpace($python)) { $python = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' }
 $statusFile = Join-Path $root 'status.json'
 $scholarshipStatusFile = Join-Path $root 'scholarship-status.json'
-$scholarshipRunner = Join-Path $root 'run-scholarship-update.ps1'
+$scholarshipRunner = Join-Path $sourceRoot 'run-scholarship-update.ps1'
 $serviceStatusFile = Join-Path $root 'service-status.json'
 $serviceDataFile = Join-Path $root 'service-data.json'
-$serviceRunner = Join-Path $root 'run-service-update.ps1'
+$serviceRunner = Join-Path $sourceRoot 'run-service-update.ps1'
 $staleStageSeconds = 360
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
 
 function Send-Bytes($stream, [byte[]]$body, $contentType, $status = '200 OK') {
     $head = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nX-Frame-Options: DENY`r`nReferrer-Policy: no-referrer`r`nConnection: close`r`n`r`n"
@@ -101,9 +104,9 @@ function Save-DashboardConfig($bodyText) {
         shareEnabled = $payload.shareEnabled -eq $true
         shareTitle = ([string]$payload.shareTitle).Trim()
     }
-    [IO.File]::WriteAllText($dashboardConfigFile,($config | ConvertTo-Json -Depth 6),[Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($dashboardConfigFile,($config | ConvertTo-Json -Depth 6),$utf8NoBom)
     $share = [ordered]@{ enabled=$config.shareEnabled; accessKey=$shareKey; title=$config.shareTitle }
-    [IO.File]::WriteAllText($shareConfigFile,($share | ConvertTo-Json -Depth 4),[Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($shareConfigFile,($share | ConvertTo-Json -Depth 4),$utf8NoBom)
     return '配置已保存；下次更新将使用新配置。'
 }
 
@@ -140,7 +143,7 @@ function Write-StatusObject($state, $message, $detail = '', $startedAt = '', $ph
         phase = [string]$phase
         lastSuccessTime = $lastSuccessTime
     } | ConvertTo-Json -Compress
-    [IO.File]::WriteAllText($statusFile,$status,[Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($statusFile,$status,$utf8NoBom)
 }
 
 function Write-ScholarshipStatusObject($state, $message, $detail = '', $startedAt = '') {
@@ -152,7 +155,7 @@ function Write-ScholarshipStatusObject($state, $message, $detail = '', $startedA
         time = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         startedAt = [string]$startedAt
     } | ConvertTo-Json -Compress
-    [IO.File]::WriteAllText($scholarshipStatusFile,$status,[Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($scholarshipStatusFile,$status,$utf8NoBom)
 }
 
 function Read-ScholarshipStatusObject {
@@ -207,7 +210,7 @@ function Invoke-ServiceExtensionUpdate($bodyText) {
     $payload=$bodyText|ConvertFrom-Json;$bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
     if(!$parsed -or !$parsed.im -or !$parsed.wecom){throw '当前Chrome返回的教学服务数据不完整。'}
     $sourceFile=Join-Path $root 'service-source.json';[IO.File]::WriteAllBytes($sourceFile,$bytes);$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,[Text.Encoding]::UTF8)
+    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom)
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$serviceRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return '教学服务数据已接收，正在更新子表。'
 }
@@ -222,12 +225,12 @@ function Repair-ServiceStatus {
         if (((Get-Date)-$lastChange).TotalMinutes -gt 8) {
             $now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
             $repaired=[ordered]@{state='error';message='教学服务更新已超时并自动解除';detail='任务超过8分钟未完成，旧数据保持不变，现在可以重新更新。';time=$now;startedAt=[string]$status.startedAt;lastSuccessTime=[string]$status.lastSuccessTime}|ConvertTo-Json -Compress
-            [IO.File]::WriteAllText($serviceStatusFile,$repaired,[Text.Encoding]::UTF8)
+            [IO.File]::WriteAllText($serviceStatusFile,$repaired,$utf8NoBom)
         }
     } catch {}
 }
 
-function Set-ServiceClientStatus($bodyText) {$payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss';$current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null};$lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='error';message='教学服务数据更新未启动';detail=[string]$payload.detail;time=$now;startedAt=$now;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,[Text.Encoding]::UTF8);return '教学服务错误已记录。'}
+function Set-ServiceClientStatus($bodyText) {$payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss';$current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null};$lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='error';message='教学服务数据更新未启动';detail=[string]$payload.detail;time=$now;startedAt=$now;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom);return '教学服务错误已记录。'}
 
 function Repair-StaleStatus {
     $status = Read-StatusObject
@@ -322,7 +325,7 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
     }
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
-    $script = Join-Path $root 'prepare_extension_update.py'
+    $script = Join-Path $sourceRoot 'prepare_extension_update.py'
     $response = Join-Path $root 'extension-classes.json'
     & $python $script $response
     if (-not (Test-Path $response)) { Send-Json $stream 'Failed to read class IDs.' '500 Internal Server Error'; return }
@@ -349,7 +352,7 @@ function Invoke-ExtensionUpdate($bodyText) {
     $previous = Read-StatusObject
     $startedAt = if ($previous -and $previous.startedAt) { [string]$previous.startedAt } else { Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
     Write-StatusObject 'running' 'CRM数据已接收，正在启动本地计算…' '' $startedAt 'local'
-    $runner = Join-Path $root 'run-direct-from-extension.ps1'
+    $runner = Join-Path $sourceRoot 'run-direct-from-extension.ps1'
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$runner+'"') -WindowStyle Hidden
     return 'CRM data received. Building and syncing dashboards.'
 }
@@ -372,6 +375,16 @@ function Invoke-LegacyUpdate {
     return 'Background update started.'
 }
 
+if (-not (Test-Path -LiteralPath $statusFile)) {
+    Write-StatusObject 'idle' '测试工作台已就绪，尚未执行数据更新。' '请先在配置面板填写专用测试工作簿；正式工作台不受影响。'
+}
+if (-not (Test-Path -LiteralPath $scholarshipStatusFile)) {
+    Write-ScholarshipStatusObject 'idle' '尚未配置或更新续费表格数据。' '请在配置面板填写专用续费工作簿和子表 ID。'
+}
+if (-not (Test-Path -LiteralPath $serviceStatusFile)) {
+    $serviceInitial = [ordered]@{state='idle';message='尚未更新教学服务数据。';detail='测试工作台使用独立状态与输出文件。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt='';lastSuccessTime=''} | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($serviceStatusFile,$serviceInitial,$utf8NoBom)
+}
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any,$port)
 try { $listener.Start() } catch { if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start-Process "http://127.0.0.1:$port/" }; exit 0 }
 if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start-Process "http://127.0.0.1:$port/" }
@@ -442,7 +455,7 @@ while ($true) {
                 if ($shareAuthorized -or $isLocal) { Send-File $stream $viewFile 'text/html; charset=utf-8' }
                 else { Send-Json $stream '共享密钥无效。' '403 Forbidden' }
             }
-            '/assets/codemao-logo.png' { Send-File $stream (Join-Path $root 'assets\codemao-logo.png') 'image/png' }
+            '/assets/codemao-logo.png' { Send-File $stream (Join-Path $sourceRoot 'assets\codemao-logo.png') 'image/png' }
             '/run' { Send-Json $stream (Invoke-LegacyUpdate) }
             '/status' { Repair-StaleStatus; Send-File $stream $statusFile 'application/json; charset=utf-8' }
             '/scholarship-status' { Send-ScholarshipStatus $stream }

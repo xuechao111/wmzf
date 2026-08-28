@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
 RAW = ROOT / "run-data" / "group-lessons-raw.json"
 OUT = ROOT / "run-data" / "exception-export-tables.json"
 CLASSES = ROOT / "run-data" / "classes.json"

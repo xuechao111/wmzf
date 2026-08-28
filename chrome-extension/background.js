@@ -1,4 +1,4 @@
-const LOCAL_BASE="http://127.0.0.1:8765";
+let LOCAL_BASE="http://127.0.0.1:8765";
 const CRM_RUNTIME_TIMEOUT_MS=6*60*1000;
 const LOCAL_RUNTIME_TIMEOUT_MS=11*60*1000;
 
@@ -484,11 +484,13 @@ async function waitForLocalRunner(startedAt,timeout=20*1000){
   return false;
 }
 
-async function runScheduledUpdate(slotKey="manual"){
+async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
   await reconcileUpdateRuntime();
   const now=Date.now();
   const lock=(await chrome.storage.local.get("updateRuntime")).updateRuntime||{};
   if(Number(lock.runningSince||0)&&now-Number(lock.runningSince)<18*60*1000)return {ok:false,error:"已有更新正在运行"};
+  const previousLocalBase=LOCAL_BASE;
+  LOCAL_BASE=/^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(localBase||""))?String(localBase):previousLocalBase;
   await chrome.storage.local.set({updateRuntime:{runningSince:now,slotKey}});
   const stored=await chrome.storage.local.get("autoSchedule");
   const schedule=stored.autoSchedule||{};
@@ -530,6 +532,7 @@ async function runScheduledUpdate(slotKey="manual"){
     return {ok:false,error:message};
   }finally{
     await chrome.storage.local.remove("updateRuntime");
+    LOCAL_BASE=previousLocalBase;
   }
 }
 
@@ -563,11 +566,16 @@ async function ensureScheduleHealth(force=false){
   }
 }
 
-chrome.alarms.onAlarm.addListener(alarm=>{
+chrome.alarms.onAlarm.addListener(async alarm=>{
   if(alarm.name==="codemao-watchdog")return checkMissedSchedules();
   if(alarm.name.startsWith("codemao-update-")){
     const now=new Date(),today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-    return runScheduledUpdate(`${alarm.name}|${today}`);
+    let localBase=LOCAL_BASE;
+    if(alarm.name.startsWith("codemao-update-manual-")){
+      localBase=String((await chrome.storage.local.get("manualLocalBase")).manualLocalBase||LOCAL_BASE);
+      await chrome.storage.local.remove("manualLocalBase");
+    }
+    return runScheduledUpdate(`${alarm.name}|${today}`,localBase);
   }
 });
 chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true)});
@@ -590,8 +598,8 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message.type==="get-schedule"){reconcileUpdateRuntime().then(()=>chrome.storage.local.get("autoSchedule")).then(x=>sendResponse({ok:true,version:chrome.runtime.getManifest().version,schedule:x.autoSchedule||{enabled:false,days:[1,2,3,4,5],times:["09:00"],lastRun:"",lastResult:""}}));return true;}
   if(message.type==="set-schedule"){setSchedule(message.schedule||{}).then(schedule=>sendResponse({ok:true,schedule}));return true;}
   if(message.type==="run-scheduled-now"){
-    chrome.alarms.create(`codemao-update-manual-${Date.now()}`,{when:Date.now()+250});
-    sendResponse({ok:true,started:true});
-    return;
+    const localBase=/^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(message.localBase||""))?String(message.localBase):LOCAL_BASE;
+    chrome.storage.local.set({manualLocalBase:localBase}).then(()=>chrome.alarms.create(`codemao-update-manual-${Date.now()}`,{when:Date.now()+250})).then(()=>sendResponse({ok:true,started:true}));
+    return true;
   }
 });

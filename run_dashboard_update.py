@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import msvcrt
+import os
 import re
 import shutil
 import subprocess
@@ -12,12 +13,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or SOURCE_ROOT)
 DATA = ROOT / "run-data"
 CONFIG = ROOT / "dashboard-config.json"
 STATUS = ROOT / "status.json"
 UPDATE_LOCK = ROOT / "update.lock"
-SKILL = ROOT
+SKILL = SOURCE_ROOT
 LEGACY_SYNC = Path(r"C:\Users\user\Desktop\Documents\编程猫管理skill\codemao-student-profile-extracted\codemao-course-data\sync.py")
 NODE = Path(shutil.which("node") or r"C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe")
 WORKBOOK = ""
@@ -594,8 +596,8 @@ def run(from_raw: bool = False) -> None:
     set_status("running", "正在计算完课、直播上座和同期异常…")
     subprocess.run([str(NODE), str(SKILL / "scripts" / "build_group_dashboard.mjs"), str(DATA), str(DATA / "classes.json"), "group-lessons-raw.json"], cwd=SKILL / "scripts", check=True)
     dashboard = json.loads((DATA / "group-dashboard-tables.json").read_text(encoding="utf-8"))
-    subprocess.run([sys.executable, str(ROOT / "get_dashboard_snapshot.py")], cwd=ROOT, check=True)
-    subprocess.run([sys.executable, str(ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, str(SOURCE_ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
     tables = dict(dashboard["sheets"])
