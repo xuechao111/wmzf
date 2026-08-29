@@ -440,7 +440,14 @@ while ($true) {
     $client = $listener.AcceptTcpClient()
     $stream = $null
     try {
+        # A browser/extension can occasionally leave a half-open local socket.
+        # Bound every client so one abandoned request cannot block the entire
+        # single-process dashboard service indefinitely.
+        $client.ReceiveTimeout = 15000
+        $client.SendTimeout = 15000
         $stream = $client.GetStream()
+        $stream.ReadTimeout = 15000
+        $stream.WriteTimeout = 15000
         # Read headers and body as bytes. Content-Length is a byte count; using
         # StreamReader characters here can deadlock on Chinese JSON payloads.
         $headerBytes = [Collections.Generic.List[byte]]::new()
