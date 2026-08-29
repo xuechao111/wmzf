@@ -28,6 +28,7 @@ CRM_PROFILE = ROOT / "crm-browser-profile"
 CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
 CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
+DISABLED_SHEETS = {"\u5f02\u5e38\u5b66\u5458", "\u63a8\u8350\u8bdd\u672f"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
 
@@ -596,12 +597,22 @@ def run(from_raw: bool = False) -> None:
     set_status("running", "正在计算完课、直播上座和同期异常…")
     subprocess.run([str(NODE), str(SKILL / "scripts" / "build_group_dashboard.mjs"), str(DATA), str(DATA / "classes.json"), "group-lessons-raw.json"], cwd=SKILL / "scripts", check=True)
     dashboard = json.loads((DATA / "group-dashboard-tables.json").read_text(encoding="utf-8"))
-    subprocess.run([sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT, check=True)
+    snapshot_build = subprocess.run(
+        [sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+    )
+    if snapshot_build.returncode:
+        lines = [line.strip() for line in snapshot_build.stdout.splitlines() if line.strip()]
+        message = lines[-1].removeprefix("RuntimeError: ") if lines else "教学看板完整性校验失败，已保留上一轮数据。"
+        raise RuntimeError(message)
     subprocess.run([sys.executable, str(SOURCE_ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
+    # Stop syncing retired views while preserving existing workbook sheets.
+    for disabled_name in DISABLED_SHEETS:
+        tables.pop(disabled_name, None)
     batch_updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
     counts = {}
     total = len(tables)

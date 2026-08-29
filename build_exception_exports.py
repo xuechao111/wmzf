@@ -305,6 +305,50 @@ def main():
             warnings.append("到课未完课率高于同期均值")
         overview_rows.append([term, teacher, len(rec["classes"]), arrival_rate, live_rate, avg_live, live_rate - avg_live, finish_rate, avg_finish, finish_rate - avg_finish, len(rec["incomplete_ids"]), len(rec["live_absent_ids"]), len(rec["replay_ids"]), len(rec["arrived_ids"]), "；".join(warnings) or "正常", period])
     overview_rows.sort(key=lambda x: (x[0], -x[7], -x[4], x[1]))
+    # The console snapshot chooses the latest available week independently for
+    # each cohort.  Reuse that verified result for the overview and live-seat
+    # sheets so completed cohorts do not disappear when newer cohorts continue.
+    snapshot_path = ROOT / "dashboard-snapshot.json"
+    if snapshot_path.exists():
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        term_by_cohort = {}
+        for block in blocks:
+            lesson_times = [int(x.get("unlock_time") or 0) for x in block.get("lessons", []) if int(x.get("unlock_time") or 0) > 0]
+            if not lesson_times:
+                continue
+            cohort_label = datetime.fromtimestamp(monday(min(lesson_times)), CN).strftime("%Y-%m-%d周")
+            class_id = int(block.get("classId") or block.get("info", {}).get("classId") or 0)
+            term_by_cohort.setdefault(cohort_label, main_term_by_class.get(class_id, int(block.get("termId") or block.get("info", {}).get("termId") or 0)))
+        overview_rows = []
+        for row in snapshot.get("rows", []):
+            current_metrics = row.get("current", {})
+            warnings = []
+            if row.get("liveAnomaly"):
+                warnings.append("准时参播率低于同期均值")
+            if row.get("finishAnomaly"):
+                warnings.append("偶数课完课率低于同期均值")
+            overview_rows.append([
+                term_by_cohort.get(row.get("cohort"), 0), row.get("teacher", ""),
+                len([x for x in snapshot.get("classes", []) if x.get("teacher") == row.get("teacher") and x.get("cohort") == row.get("cohort")]),
+                current_metrics.get("arrivalRate", 0), current_metrics.get("liveRate", 0), row.get("cohortLiveAverage", 0), row.get("cohortLiveGap", 0),
+                current_metrics.get("finishRate", 0), row.get("cohortFinishAverage", 0), row.get("cohortFinishGap", 0),
+                current_metrics.get("incompleteStudents", 0), current_metrics.get("liveAbsentStudents", 0), current_metrics.get("replayStudents", 0), current_metrics.get("arrivedIncompleteStudents", 0),
+                "；".join(warnings) or "正常", row.get("currentWeek", "")
+            ])
+        overview_rows.sort(key=lambda x: (x[0], -x[7], -x[4], x[1]))
+        live_rows = []
+        for row in snapshot.get("classes", []):
+            current_metrics = row.get("current", {})
+            expected = int(current_metrics.get("liveExpected", 0) or 0)
+            if not expected:
+                continue
+            attend_count = int(current_metrics.get("liveAttend", 0) or 0)
+            live_rows.append([
+                row.get("teacher", ""), row.get("slot", ""), int(row.get("classId", 0) or 0), row.get("className", ""),
+                ",".join(str(x) for x in row.get("liveLessonNumbers", [])), expected, attend_count, expected - attend_count,
+                int(current_metrics.get("liveAbsentStudents", 0) or 0), attend_count / expected, row.get("currentWeek", "")
+            ])
+        live_rows.sort(key=lambda x: (x[0], x[1], x[2]))
     tables = {
         "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "同期直播均值", "直播差值", "偶数课完课率", "同期完课均值", "完课差值", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
                  "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "同期直播均值": "float", "直播差值": "float", "偶数课完课率": "float", "同期完课均值": "float", "完课差值": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "同期直播均值": "0.0%", "直播差值": "0.0%", "偶数课完课率": "0.0%", "同期完课均值": "0.0%", "完课差值": "0.0%"}},
@@ -318,6 +362,21 @@ def main():
         "班级直播上座": {"columns": ["老师姓名", "班型", "班级ID", "班级", "已开直播课节", "直播应到次数", "直播上座次数", "直播未上座次数", "直播未上座人数", "直播上座率", "统计周期"], "data": live_rows,
                        "dtypes": {"班级ID": "int", "直播应到次数": "int", "直播上座次数": "int", "直播未上座次数": "int", "直播未上座人数": "int", "直播上座率": "float"}, "formats": {"直播上座率": "0.0%"}},
     }
+    # Enrich the workbook overview with teaching-service metrics. Missing
+    # values stay blank and are never converted to zero.
+    overview = tables.get("\u7ec4\u5185\u6982\u89c8")
+    if overview and snapshot_path.exists():
+        current_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        service_by_teacher = {
+            str(item.get("teacher") or ""): item.get("service", {})
+            for item in current_snapshot.get("rows", [])
+        }
+        overview["columns"].extend(["IM 3\u5206\u949f\u56de\u590d\u7387", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387", "\u6559\u5b66\u670d\u52a1\u66f4\u65b0\u65f6\u95f4"])
+        for export_row in overview.get("data", []):
+            service = service_by_teacher.get(str(export_row[1] or ""), {})
+            export_row.extend([service.get("imRate"), service.get("wecomRate"), service.get("updatedAt", "")])
+        overview.setdefault("dtypes", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "float", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "float"})
+        overview.setdefault("formats", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "0.0%", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "0.0%"})
     OUT.write_text(json.dumps({"period": period, "fallback": not has_current, "tables": tables}, ensure_ascii=False), encoding="utf-8")
     print(json.dumps({"period": period, "fallback": not has_current, "overviewRows": len(overview_rows), "abnormalRows": len(abnormal_rows), "abnormalSummaryRows": len(abnormal_summary_rows), "recommendedRows": len(recommended_rows), "untimelyRows": len(untimely_rows), "replayRows": len(replay_rows), "liveRows": len(live_rows)}, ensure_ascii=False))
 

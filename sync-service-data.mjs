@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 const DEFAULT_WORKBOOK="";
 const DASHBOARD_CONFIG=path.join(process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url)),"dashboard-config.json");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
-const WORKBOOK=DASHBOARD_SETTINGS.workbookUrl||DEFAULT_WORKBOOK;
+const WORKBOOK=DASHBOARD_SETTINGS.serviceWorkbookUrl||DASHBOARD_SETTINGS.workbookUrl||DEFAULT_WORKBOOK;
 const SHEET_NAME="教学服务数据";
 const CREDENTIAL_FILES=[process.env.CODEMAO_SCHOLARSHIP_CREDENTIALS_FILE,"C:/Users/user/Desktop/Documents/编程猫管理skill/codemao-student-profile-extracted/codemao-course-data/sync.py"].filter(Boolean);
 const normalize=value=>String(value??"").replace(/\s+/g," ").trim();

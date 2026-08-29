@@ -13,8 +13,9 @@ $dashboardConfigFile = Join-Path $root 'dashboard-config.json'
 $dashboardUrl = 'https://alidocs.dingtalk.com/'
 $crmUrl = 'https://codecamp-crm.codemao.cn/layout/my-class'
 $rulesFile = 'C:\Users\user\.codex\skills\codemao-group-completion-dashboard\references\rules.md'
-$python = (Get-Command python -ErrorAction SilentlyContinue).Source
-if ([string]::IsNullOrWhiteSpace($python)) { $python = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' }
+$bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$python = if (Test-Path -LiteralPath $bundledPython) { $bundledPython } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
+if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python)) { throw '未找到可用的 Python 运行环境，控制台已停止启动以避免返回旧数据。' }
 $statusFile = Join-Path $root 'status.json'
 $scholarshipStatusFile = Join-Path $root 'scholarship-status.json'
 $scholarshipRunner = Join-Path $sourceRoot 'run-scholarship-update.ps1'
@@ -46,8 +47,10 @@ function Get-DashboardConfig {
         hasDingtalkAccessKey = $false
         renewalWorkbookUrl = ''
         renewalSheetId = ''
+        serviceWorkbookUrl = ''
         classes = @()
         excludedTeachers = @('薛超')
+        comparisonTeachers = @()
         shareEnabled = $true
         shareTitle = '深圳战区 · 屹柯组教学数据共享看板'
         hasShareAccessKey = $false
@@ -55,7 +58,7 @@ function Get-DashboardConfig {
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','classes','excludedTeachers','shareEnabled','shareTitle')) {
+            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','serviceWorkbookUrl','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -74,6 +77,11 @@ function Save-DashboardConfig($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
     $workbook = [string]$payload.workbookUrl
     if ($workbook -notmatch '^https://alidocs\.dingtalk\.com/') { throw '钉钉文档链接格式不正确。' }
+    $renewalWorkbook = ([string]$payload.renewalWorkbookUrl).Trim()
+    $serviceWorkbook = ([string]$payload.serviceWorkbookUrl).Trim()
+    foreach ($candidate in @($renewalWorkbook,$serviceWorkbook)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^https://alidocs\.dingtalk\.com/') { throw '续费或教学服务文档链接格式不正确。' }
+    }
     $classes = @()
     foreach ($pair in @($payload.classes)) {
         if (@($pair).Count -lt 2) { throw '班级配置必须是“班级ID,主课期ID”。' }
@@ -97,10 +105,12 @@ function Save-DashboardConfig($bodyText) {
         workbookUrl = $workbook.Trim()
         dingtalkConnectionUrl = $connectionUrl
         dingtalkAccessKey = $connectionKey
-        renewalWorkbookUrl = ([string]$payload.renewalWorkbookUrl).Trim()
+        renewalWorkbookUrl = $renewalWorkbook
         renewalSheetId = ([string]$payload.renewalSheetId).Trim()
+        serviceWorkbookUrl = $serviceWorkbook
         classes = $classes
         excludedTeachers = @($payload.excludedTeachers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        comparisonTeachers = @($payload.comparisonTeachers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
         shareEnabled = $payload.shareEnabled -eq $true
         shareTitle = ([string]$payload.shareTitle).Trim()
     }
@@ -279,19 +289,27 @@ function Send-File($stream, $file, $contentType) {
 
 function Send-ConsoleData($stream, $mode, $query) {
     $api = Join-Path $root 'console_data_api.py'
-    $response = Join-Path $root 'console-response.json'
-    if ($mode -eq 'meta') {
-        & $python $api 'meta' $response
-    } else {
-        $params = [Web.HttpUtility]::ParseQueryString($query)
-        $name = $params['name']
-        $page = if ($params['page']) { $params['page'] } else { '1' }
-        $size = if ($params['size']) { $params['size'] } else { '50' }
-        $searchText = if ([string]::IsNullOrEmpty([string]$params['q'])) { '__EMPTY__' } else { [string]$params['q'] }
-        $cohort = if ([string]::IsNullOrEmpty([string]$params['cohort'])) { 'all' } else { [string]$params['cohort'] }
-        & $python $api 'table' $response $name $page $size $searchText $cohort
+    $response = Join-Path $root ('.console-response-' + [Guid]::NewGuid().ToString('N') + '.json')
+    try {
+        if ($mode -eq 'meta') {
+            & $python $api 'meta' $response
+        } else {
+            $params = [Web.HttpUtility]::ParseQueryString($query)
+            $name = $params['name']
+            $page = if ($params['page']) { $params['page'] } else { '1' }
+            $size = if ($params['size']) { $params['size'] } else { '50' }
+            $searchText = if ([string]::IsNullOrEmpty([string]$params['q'])) { '__EMPTY__' } else { [string]$params['q'] }
+            $cohort = if ([string]::IsNullOrEmpty([string]$params['cohort'])) { 'all' } else { [string]$params['cohort'] }
+            & $python $api 'table' $response $name $page $size $searchText $cohort
+        }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $response)) {
+            Send-Json $stream '控制台数据生成失败，已拒绝返回历史缓存。' '500 Internal Server Error'
+            return
+        }
+        Send-File $stream $response 'application/json; charset=utf-8'
+    } finally {
+        if (Test-Path -LiteralPath $response) { Remove-Item -LiteralPath $response -Force -ErrorAction SilentlyContinue }
     }
-    Send-File $stream $response 'application/json; charset=utf-8'
 }
 
 function Send-DashboardData($stream) {

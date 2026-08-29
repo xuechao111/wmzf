@@ -21,6 +21,7 @@ LABELS = {
     "回放学员": "回放学员与观看进度明细",
 }
 ORDER = list(LABELS)
+DISABLED_TABLES = {"\u5f02\u5e38\u5b66\u5458", "\u63a8\u8350\u8bdd\u672f"}
 
 
 def load_tables() -> tuple[dict, dict]:
@@ -28,6 +29,9 @@ def load_tables() -> tuple[dict, dict]:
     extra = json.loads(EXCEPTION.read_text(encoding="utf-8")) if EXCEPTION.exists() else {"tables": {}}
     tables = dict(group.get("sheets", {}))
     tables.update(extra.get("tables", {}))
+    # Retire these two views without deleting their historical source data.
+    for name in DISABLED_TABLES:
+        tables.pop(name, None)
     return tables, extra
 
 

@@ -3,6 +3,7 @@ dashboard-config.json
 share-config.json
 *.local.json
 instances/
+console-test.json
 
 # CRM sessions and learner data
 crm-browser-profile/

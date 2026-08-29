@@ -5,7 +5,8 @@ import {fileURLToPath} from "node:url";
 const DASHBOARD_CONFIG=path.join(process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url)),"dashboard-config.json");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
 const WORKBOOK = DASHBOARD_SETTINGS.renewalWorkbookUrl || "";
-const SHEET_ID = DASHBOARD_SETTINGS.renewalSheetId || "";
+const CONFIGURED_SHEET_ID = DASHBOARD_SETTINGS.renewalSheetId || "";
+const TARGET_SHEET_NAME = "\u5956\u5b66\u91d1\u660e\u7ec6";
 const TARGET_END_COLUMN = "AM";
 const EXPECTED_COLUMN_COUNT = 39;
 const FILTERS = {"续费月份":"2026-08-01","续费节点":"首续","战队":"深圳战区"};
@@ -91,26 +92,27 @@ function findRows(value) {
 }
 
 async function writeAndVerify(source) {
-  const headerResult = await mcpCall("get_range",{nodeId:WORKBOOK,sheetId:SHEET_ID,range:`A1:${TARGET_END_COLUMN}1`});
+  const sheetId = await resolveTargetSheetId();
+  const headerResult = await mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A1:${TARGET_END_COLUMN}1`});
   const targetHeaders = (findRows(headerResult)?.[0] || []).map(normalizeText);
   if (targetHeaders.length !== EXPECTED_COLUMN_COUNT || targetHeaders.some(header => !header)) throw new Error(`DINGTALK_HEADER_INVALID:${targetHeaders.length}`);
   const missing = targetHeaders.filter(header => !source.headers.includes(header));
   if (missing.length) throw new Error(`CRM_MISSING_TARGET_COLUMNS:${missing.join("|")}`);
   const tableRows = source.rows.map(row => Object.fromEntries(targetHeaders.map(header => [header,row[header] ?? ""])));
   validateSource(targetHeaders,tableRows);
-  const infoBefore = await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId:SHEET_ID});
+  const infoBefore = await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId});
   const previousLastRow = Number(infoBefore.nonEmptyRange?.lastRow || (Number(infoBefore.lastNonEmptyRow)+1) || 1);
   const matrix = [targetHeaders,...tableRows.map(row => targetHeaders.map(header => row[header] ?? ""))];
   for (let start=0;start<matrix.length;start+=600) {
     const chunk=matrix.slice(start,start+600);
-    await mcpCall("set_range_from_csv",{nodeId:WORKBOOK,sheetId:SHEET_ID,startCell:`A${start+1}`,csv:matrixToCsv(chunk),allowOverwrite:true});
+    await mcpCall("set_range_from_csv",{nodeId:WORKBOOK,sheetId,startCell:`A${start+1}`,csv:matrixToCsv(chunk),allowOverwrite:true});
   }
   const newLastRow=tableRows.length+1;
-  if (previousLastRow>newLastRow) await mcpCall("clear_range",{nodeId:WORKBOOK,sheetId:SHEET_ID,range:`A${newLastRow+1}:${TARGET_END_COLUMN}${previousLastRow}`,type:"content"});
-  const infoAfter=await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId:SHEET_ID});
+  if (previousLastRow>newLastRow) await mcpCall("clear_range",{nodeId:WORKBOOK,sheetId,range:`A${newLastRow+1}:${TARGET_END_COLUMN}${previousLastRow}`,type:"content"});
+  const infoAfter=await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId});
   const verify=await Promise.all([
-    mcpCall("get_range",{nodeId:WORKBOOK,sheetId:SHEET_ID,range:`A1:${TARGET_END_COLUMN}2`}),
-    mcpCall("get_range",{nodeId:WORKBOOK,sheetId:SHEET_ID,range:`A${newLastRow}:${TARGET_END_COLUMN}${newLastRow}`}),
+    mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A1:${TARGET_END_COLUMN}2`}),
+    mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A${newLastRow}:${TARGET_END_COLUMN}${newLastRow}`}),
   ]);
   const top=findRows(verify[0])||[],bottom=findRows(verify[1])||[];
   if (JSON.stringify((top[0]||[]).map(normalizeText))!==JSON.stringify(targetHeaders)) throw new Error("VERIFY_HEADER_MISMATCH");
@@ -120,6 +122,15 @@ async function writeAndVerify(source) {
   const actualLast=Number(infoAfter.nonEmptyRange?.lastRow || (Number(infoAfter.lastNonEmptyRow)+1) || 0);
   if (actualLast!==newLastRow) throw new Error(`VERIFY_ROW_COUNT_MISMATCH:${actualLast}/${newLastRow}`);
   return {rows:tableRows.length,lastRow:actualLast};
+}
+
+async function resolveTargetSheetId() {
+  if (CONFIGURED_SHEET_ID) return CONFIGURED_SHEET_ID;
+  const listing=await mcpCall("get_all_sheets",{nodeId:WORKBOOK});
+  const sheets=Array.isArray(listing)?listing:(listing?.sheets||listing?.data?.sheets||[]);
+  const target=sheets.find(sheet=>normalizeText(sheet?.name)===TARGET_SHEET_NAME);
+  if (!target) throw new Error(`DINGTALK_RENEWAL_DETAIL_SHEET_NOT_FOUND:${TARGET_SHEET_NAME}`);
+  return target.sheetId||target.name;
 }
 
 async function updateDashboardTimestamp() {
@@ -148,7 +159,7 @@ async function updateDashboardTimestamp() {
 }
 
 async function main() {
-  if (!WORKBOOK || !SHEET_ID) throw new Error("请先在工作台配置面板填写续费明细工作簿和子表 ID");
+  if (!WORKBOOK) throw new Error("请先在工作台配置面板填写续费数据钉钉文档链接");
   const inputFile=process.argv[2];
   if (!inputFile || !fs.existsSync(inputFile)) throw new Error("CRM_INPUT_FILE_NOT_FOUND");
   const source=JSON.parse(fs.readFileSync(inputFile,"utf8").replace(/^\uFEFF/,""));

@@ -197,11 +197,48 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
           return {ids,names};
         };
         let matchedLiveBoards=0;
+        const collectClassIds=value=>{
+          const found=[];
+          const visit=(node,key="")=>{
+            if(node==null)return;
+            if(Array.isArray(node)){for(const item of node)visit(item,key);return;}
+            if(typeof node==="object"){
+              for(const [childKey,child] of Object.entries(node))visit(child,childKey);
+              return;
+            }
+            if(/class.*id|id.*class/i.test(key)){
+              const id=Number(node);
+              if(Number.isInteger(id)&&id>0)found.push(id);
+            }
+          };
+          visit(value);
+          return [...new Set(found)];
+        };
         for(const board of boards){
           const lessonNumber=Number(String(board.courseName||"").match(/^(\d+)-/)?.[1]||0);
-          if(!lessonNumber||lessonNumber%2===0)continue;
-          const classIds=(board.classIdList||[]).map(Number);
-          const targets=output.filter(block=>classIds.includes(Number(block.classId)));
+          // Course numbers are not reliably odd/even after inserted lessons.
+          // A CRM live-board record plus an exact class match is authoritative.
+          if(!lessonNumber)continue;
+          // CRM live rooms use multiple schemas. Read only values carried by
+          // class/id-labelled keys, including nested class lists.
+          const classIds=[...new Set([...(board.classIdList||[]).map(Number),...collectClassIds(board)])];
+          // Each Friday/Saturday slot has its own CRM class ID. Always bind a
+          // room to that exact ID first; merging sibling IDs would inflate the
+          // numerator and denominator by combining several teaching slots.
+          let targets=output.filter(block=>classIds.includes(Number(block.classId)));
+          if(!targets.length){
+            // Some CRM rooms omit or retain an outdated classIdList after a
+            // teacher/class transfer. Fall back only to a strict triple match
+            // so a room can never leak into another class or schedule slot.
+            const boardTeacher=String(board.teacherName||board.teacherFullName||board.nickname||"").split("-C")[0].trim();
+            let boardStart=Number(board.livingStartTime||board.startTime||board.livingBeginTime||0);
+            if(boardStart>1e12)boardStart=Math.floor(boardStart/1000);
+            const candidates=output.filter(block=>{
+              const blockTeacher=String(block.info?.teacherName||"").split("-C")[0].trim();
+              return boardTeacher&&blockTeacher===boardTeacher&&(block.lessons||[]).some(lesson=>Number(lesson.course_number)===lessonNumber&&(!boardStart||Math.abs(Number(lesson.unlock_time||0)-boardStart)<=7200));
+            });
+            if(boardStart||candidates.length===1)targets=candidates;
+          }
           if(!targets.length)continue;
           matchedLiveBoards+=targets.length;
           const attended=await studentIds(board,true),absent=await studentIds(board,false);
