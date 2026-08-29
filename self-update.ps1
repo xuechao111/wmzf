@@ -23,32 +23,38 @@ function Install-FromZip {
     $extractRoot = Join-Path $tempRoot 'extract'
     [void](New-Item -ItemType Directory -Path $extractRoot -Force)
     try {
-        Write-UpdateStatus 'running' '未使用 Git，正在下载 GitHub ZIP…' '本机配置、密钥及运行数据会被保留。'
+        Write-UpdateStatus 'running' 'Downloading the GitHub ZIP package...' 'Local configuration, secrets, and runtime data will be preserved.'
         Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing -TimeoutSec 120
         Expand-Archive -LiteralPath $zipFile -DestinationPath $extractRoot -Force
         $packageRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
         if (-not $packageRoot -or -not (Test-Path -LiteralPath (Join-Path $packageRoot.FullName 'bridge.ps1'))) {
-            throw '下载包结构不完整，已停止覆盖。'
+            throw 'The downloaded package is incomplete; installation was stopped.'
         }
         Get-ChildItem -LiteralPath $packageRoot.FullName -Force | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination $InstallRoot -Recurse -Force
         }
-        return 'ZIP 下载覆盖完成'
+        return 'ZIP installation completed'
     } finally {
         if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
 try {
-    Write-UpdateStatus 'running' '正在检查 GitHub 最新版本…' '优先 Git 更新；不可用时自动切换 ZIP。'
+    Write-UpdateStatus 'running' 'Checking the latest GitHub version...' 'Git is preferred; ZIP is the automatic fallback.'
     $method = ''
     $git = Get-Command git.exe -ErrorAction SilentlyContinue
     if ($git -and (Test-Path -LiteralPath (Join-Path $InstallRoot '.git'))) {
-        $output = & $git.Source -c ("safe.directory=" + ($InstallRoot -replace '\\','/')) -C $InstallRoot pull --ff-only origin main 2>&1
-        if ($LASTEXITCODE -eq 0) { $method = 'Git 更新完成' }
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = & $git.Source -c ("safe.directory=" + ($InstallRoot -replace '\\','/')) -C $InstallRoot pull --ff-only origin main 2>&1
+            if ($LASTEXITCODE -eq 0) { $method = 'Git update completed' }
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
     }
     if (-not $method) { $method = Install-FromZip }
-    Write-UpdateStatus 'success' '工作台已更新到 GitHub 最新版本。' "$method；正在自动重启本地服务。"
+    Write-UpdateStatus 'success' 'The workbench is updated to the latest GitHub version.' "$method; restarting the local service."
     $restart = Join-Path $InstallRoot 'restart-dashboard.ps1'
     if (Test-Path -LiteralPath $restart) {
         $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $restart + '"'),'-InstallRoot',('"' + $InstallRoot + '"'),'-RuntimeRoot',('"' + $RuntimeRoot + '"'),'-Port',[string]$Port)
@@ -57,6 +63,6 @@ try {
         Start-Process powershell.exe -ArgumentList $arguments -WindowStyle Hidden
     }
 } catch {
-    Write-UpdateStatus 'error' '工作台更新失败。' $_.Exception.Message
+    Write-UpdateStatus 'error' 'Workbench update failed.' $_.Exception.Message
     exit 1
 }
