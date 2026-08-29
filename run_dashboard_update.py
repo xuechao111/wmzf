@@ -28,7 +28,7 @@ CRM_PROFILE = ROOT / "crm-browser-profile"
 CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
 CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
-DISABLED_SHEETS = {"\u5f02\u5e38\u5b66\u5458", "\u63a8\u8350\u8bdd\u672f"}
+DISABLED_SHEETS = {"\u63a8\u8350\u8bdd\u672f"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
 

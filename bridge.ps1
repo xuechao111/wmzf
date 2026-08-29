@@ -289,7 +289,7 @@ function Send-File($stream, $file, $contentType) {
 }
 
 function Send-ConsoleData($stream, $mode, $query) {
-    $api = Join-Path $root 'console_data_api.py'
+    $api = Join-Path $sourceRoot 'console_data_api.py'
     $response = Join-Path $root ('.console-response-' + [Guid]::NewGuid().ToString('N') + '.json')
     try {
         if ($mode -eq 'meta') {
@@ -314,7 +314,7 @@ function Send-ConsoleData($stream, $mode, $query) {
 }
 
 function Send-DashboardData($stream) {
-    $snapshotScript = Join-Path $root 'get_dashboard_snapshot.py'
+    $snapshotScript = Join-Path $sourceRoot 'get_dashboard_snapshot.py'
     $snapshotFile = Join-Path $root 'dashboard-snapshot.json'
     if (-not (Test-Path $snapshotFile)) { & $python $snapshotScript }
     Send-File $stream $snapshotFile 'application/json; charset=utf-8'
