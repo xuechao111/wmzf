@@ -16,6 +16,7 @@ console-response.json
 *-status.json
 status.json
 self-update-status.json
+setup-report.txt
 
 # Runtime artifacts
 *.log
