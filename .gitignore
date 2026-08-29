@@ -15,6 +15,7 @@ service-debug.json
 console-response.json
 *-status.json
 status.json
+self-update-status.json
 
 # Runtime artifacts
 *.log

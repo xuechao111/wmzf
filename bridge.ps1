@@ -22,6 +22,8 @@ $scholarshipRunner = Join-Path $sourceRoot 'run-scholarship-update.ps1'
 $serviceStatusFile = Join-Path $root 'service-status.json'
 $serviceDataFile = Join-Path $root 'service-data.json'
 $serviceRunner = Join-Path $sourceRoot 'run-service-update.ps1'
+$selfUpdateRunner = Join-Path $sourceRoot 'self-update.ps1'
+$selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
 $staleStageSeconds = 360
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 
@@ -30,6 +32,23 @@ function Send-Bytes($stream, [byte[]]$body, $contentType, $status = '200 OK') {
     $header = [Text.Encoding]::ASCII.GetBytes($head)
     $stream.Write($header,0,$header.Length)
     $stream.Write($body,0,$body.Length)
+}
+
+function Start-SelfUpdate {
+    if (-not (Test-Path -LiteralPath $selfUpdateRunner)) { throw '未找到一键更新脚本。' }
+    $running = $null
+    if (Test-Path -LiteralPath $selfUpdateStatusFile) {
+        try { $running = Get-Content -LiteralPath $selfUpdateStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+    }
+    if ($running -and [string]$running.state -eq 'running') { return '更新任务已在运行。' }
+    $initial = [ordered]@{state='running';message='正在启动一键更新…';detail='优先 Git，未安装 Git 时自动下载 ZIP。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')} | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($selfUpdateStatusFile,$initial,$utf8NoBom)
+    $instance = if ($env:HF_DASHBOARD_INSTANCE) { [string]$env:HF_DASHBOARD_INSTANCE } else { '' }
+    $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $selfUpdateRunner + '"'),'-InstallRoot',('"' + $sourceRoot + '"'),'-RuntimeRoot',('"' + $root + '"'),'-Port',[string]$port)
+    if (-not [string]::IsNullOrWhiteSpace($instance)) { $arguments += @('-Instance',$instance) }
+    $arguments += @('-ServicePid',[string]$PID)
+    Start-Process powershell.exe -ArgumentList $arguments -WindowStyle Hidden
+    return '一键更新已启动。'
 }
 
 function Get-ShareConfig {
@@ -515,6 +534,14 @@ while ($true) {
             '/scholarship-status' { Send-ScholarshipStatus $stream }
             '/service-status' { Repair-ServiceStatus; Send-File $stream $serviceStatusFile 'application/json; charset=utf-8' }
             '/service-data' { Send-File $stream $serviceDataFile 'application/json; charset=utf-8' }
+            '/self-update-status' {
+                if (Test-Path -LiteralPath $selfUpdateStatusFile) { Send-File $stream $selfUpdateStatusFile 'application/json; charset=utf-8' }
+                else { Send-Json $stream '尚未执行工作台更新。' }
+            }
+            '/self-update' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 启动更新。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Start-SelfUpdate) } catch { Send-Json $stream $_.Exception.Message '500 Internal Server Error' } }
+            }
             '/config' {
                 if ($method -eq 'GET') {
                     $configJson = Get-DashboardConfig | ConvertTo-Json -Depth 6 -Compress
