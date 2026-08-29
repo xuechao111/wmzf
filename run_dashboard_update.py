@@ -58,6 +58,49 @@ def configured_classes() -> list[list[int]]:
     return [list(pair) for pair in dict.fromkeys(map(tuple, result))]
 
 
+def comparison_teachers() -> set[str]:
+    """Teachers shown in the local comparison board but never written to DingTalk."""
+    return {
+        str(name).strip()
+        for name in dashboard_config().get("comparisonTeachers", [])
+        if str(name).strip()
+    }
+
+
+def filter_comparison_rows_for_dingtalk(tables: dict[str, dict]) -> dict[str, dict]:
+    """Remove configured comparison teachers from every teacher-scoped DingTalk table.
+
+    This intentionally runs after the local snapshot is built, so comparison
+    teachers remain available for cohort averages and Gap calculations in the
+    console while all DingTalk outputs remain group-only.
+    """
+    hidden = comparison_teachers()
+    if not hidden:
+        return tables
+    teacher_headers = {"老师", "老师姓名", "主讲老师"}
+    for table in tables.values():
+        columns = [str(value or "").strip() for value in table.get("columns", [])]
+        teacher_index = next((index for index, name in enumerate(columns) if name in teacher_headers), None)
+        if teacher_index is None:
+            continue
+        rows = table.get("data", [])
+        table["data"] = [
+            row for row in rows
+            if teacher_index >= len(row) or str(row[teacher_index] or "").strip() not in hidden
+        ]
+        if isinstance(table.get("anomalies"), list):
+            kept = [item for item in table["anomalies"] if str(item.get("teacher") or "").strip() not in hidden]
+            row_by_teacher = {
+                str(row[teacher_index] or "").strip(): index + 2
+                for index, row in enumerate(table["data"])
+                if teacher_index < len(row)
+            }
+            for item in kept:
+                item["row"] = row_by_teacher.get(str(item.get("teacher") or "").strip(), item.get("row"))
+            table["anomalies"] = kept
+    return tables
+
+
 WORKBOOK = configured_workbook()
 
 
@@ -613,6 +656,7 @@ def run(from_raw: bool = False) -> None:
     # Stop syncing retired views while preserving existing workbook sheets.
     for disabled_name in DISABLED_SHEETS:
         tables.pop(disabled_name, None)
+    filter_comparison_rows_for_dingtalk(tables)
     batch_updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
     counts = {}
     total = len(tables)

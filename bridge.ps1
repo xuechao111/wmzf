@@ -54,6 +54,7 @@ function Get-DashboardConfig {
         shareEnabled = $true
         shareTitle = '深圳战区 · 屹柯组教学数据共享看板'
         hasShareAccessKey = $false
+        isTestInstance = ($env:HF_DASHBOARD_INSTANCE -eq 'test' -or $root -ne $sourceRoot)
     }
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
@@ -321,7 +322,7 @@ function Send-DashboardData($stream) {
 
 function Test-ScheduledSlotAlreadyCompleted($slotKey) {
     if ([string]::IsNullOrWhiteSpace([string]$slotKey) -or [string]$slotKey -like 'codemao-update-manual-*' -or [string]$slotKey -eq 'manual') { return $false }
-    $match = [regex]::Match([string]$slotKey, '^codemao-update-\d-(\d{2})(\d{2})\|(\d{4}-\d{2}-\d{2})$')
+    $match = [regex]::Match([string]$slotKey, '^codemao-(?:test-)?update-\d-(\d{2})(\d{2})\|(\d{4}-\d{2}-\d{2})$')
     if (-not $match.Success) { return $false }
     $status = Read-StatusObject
     if ($null -eq $status -or [string]$status.state -ne 'success' -or [string]::IsNullOrWhiteSpace([string]$status.lastSuccessTime)) { return $false }
@@ -341,12 +342,40 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
         Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8'
         return
     }
+    if (Test-RecentUpdateRunning) {
+        $status = Read-StatusObject
+        $payload = [ordered]@{alreadyRunning=$true;startedAt=[string]$status.startedAt;phase=[string]$status.phase;slotKey=$slotKey} | ConvertTo-Json -Compress
+        Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8' '202 Accepted'
+        return
+    }
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
     $script = Join-Path $sourceRoot 'prepare_extension_update.py'
     $response = Join-Path $root 'extension-classes.json'
-    & $python $script $response
-    if (-not (Test-Path $response)) { Send-Json $stream 'Failed to read class IDs.' '500 Internal Server Error'; return }
+    $prepareStdout = Join-Path $root ('.prepare-' + [Guid]::NewGuid().ToString('N') + '.out.log')
+    $prepareStderr = Join-Path $root ('.prepare-' + [Guid]::NewGuid().ToString('N') + '.error.log')
+    try {
+        $prepareProcess = Start-Process -FilePath $python -ArgumentList @('-X','utf8',('"'+$script+'"'),('"'+$response+'"')) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $prepareStdout -RedirectStandardError $prepareStderr
+        $prepareOutput = @()
+        if (Test-Path -LiteralPath $prepareStdout) { $prepareOutput += @(Get-Content -LiteralPath $prepareStdout -Encoding UTF8 -ErrorAction SilentlyContinue) }
+        if (Test-Path -LiteralPath $prepareStderr) { $prepareOutput += @(Get-Content -LiteralPath $prepareStderr -Encoding UTF8 -ErrorAction SilentlyContinue) }
+    } finally {
+        Remove-Item -LiteralPath $prepareStdout,$prepareStderr -Force -ErrorAction SilentlyContinue
+    }
+    if ($prepareProcess.ExitCode -ne 0 -or -not (Test-Path $response)) {
+        $config = Get-DashboardConfig
+        $detail = if (@($config.classes).Count -eq 0 -and ([string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl) -or -not $config.hasDingtalkAccessKey)) {
+            '配置不完整：请填写钉钉连接地址和访问密钥，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
+        } elseif ($prepareOutput.Count -gt 0) {
+            '读取班级配置失败：' + [string]$prepareOutput[-1]
+        } else {
+            '读取班级配置失败，请检查钉钉连接信息和“班级id”子表。'
+        }
+        Write-StatusObject 'error' '更新准备失败，未读取到班级配置。' $detail $startedAt 'prepare'
+        $payload = [ordered]@{message='Failed to prepare class IDs.';detail=$detail} | ConvertTo-Json -Compress
+        Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8' '422 Unprocessable Entity'
+        return
+    }
     Send-File $stream $response 'application/json; charset=utf-8'
 }
 
@@ -502,8 +531,12 @@ while ($true) {
             '/service-client-status' { if($method-ne'POST'){Send-Json $stream 'Method not allowed' '405 Method Not Allowed'}else{try{Send-Json $stream (Set-ServiceClientStatus $bodyText)}catch{Send-Json $stream $_.Exception.Message '400 Bad Request'}} }
             '/dashboard-data' { Send-DashboardData $stream }
             '/prepare-extension' {
-                if (Test-RecentUpdateRunning) { Send-Json $stream '已有一轮更新正在运行，请等待当前任务完成。' '409 Conflict' }
-                else { Send-ExtensionClasses $stream $bodyText }
+                try { Send-ExtensionClasses $stream $bodyText }
+                catch {
+                    $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    Write-StatusObject 'error' '更新准备失败。' ([string]$_.Exception.Message) $startedAt 'prepare'
+                    Send-Json $stream ([string]$_.Exception.Message) '500 Internal Server Error'
+                }
             }
             '/extension-data' {
                 try { Send-Json $stream (Invoke-ExtensionUpdate $bodyText) }

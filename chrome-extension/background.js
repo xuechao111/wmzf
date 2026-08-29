@@ -2,6 +2,16 @@ let LOCAL_BASE="http://127.0.0.1:8765";
 const CRM_RUNTIME_TIMEOUT_MS=6*60*1000;
 const LOCAL_RUNTIME_TIMEOUT_MS=11*60*1000;
 
+function normalizeLocalBase(value){
+  return /^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(value||""))?String(value):"http://127.0.0.1:8765";
+}
+function instanceStorageKey(name,localBase=LOCAL_BASE){
+  return `${name}${normalizeLocalBase(localBase).endsWith(":8766")?"Test":""}`;
+}
+function instanceAlarmPrefix(localBase=LOCAL_BASE){
+  return normalizeLocalBase(localBase).endsWith(":8766")?"codemao-test-update":"codemao-update";
+}
+
 async function injectDashboardBridge(){
   try{
     const tabs=await chrome.tabs.query({url:["http://127.0.0.1/*","http://localhost/*"]});
@@ -16,12 +26,13 @@ async function fetchWithTimeout(url,options={},timeout=20000){
   finally{clearTimeout(timer);}
 }
 
-async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000){
+async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
   const deadline=Date.now()+timeout;
   let lastError="本地控制台服务未启动";
   while(Date.now()<deadline){
     try{
-      const response=await fetchWithTimeout(`${LOCAL_BASE}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},10000);
+      const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},10000);
       if(response.status===409)throw new Error("已有更新正在运行");
       if(response.ok)return await response.json();
       lastError=`本地控制台返回 ${response.status}`;
@@ -35,25 +46,28 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000){
   throw new Error(`本地控制台服务连续2分钟不可用：${lastError}`);
 }
 
-async function postLocalStatus(state,message,detail="",phase="crm"){
+async function postLocalStatus(state,message,detail="",phase="crm",localBase=LOCAL_BASE){
   const body=JSON.stringify({state,message,detail,phase}).replace(/[\u0080-\uFFFF]/g,char=>`\\u${char.charCodeAt(0).toString(16).padStart(4,"0")}`);
-  try{await fetchWithTimeout(`${LOCAL_BASE}/extension-status`,{method:"POST",headers:{"Content-Type":"application/json"},body},5000);}catch{}
+  try{await fetchWithTimeout(`${normalizeLocalBase(localBase)}/extension-status`,{method:"POST",headers:{"Content-Type":"application/json"},body},5000);}catch{}
 }
 
-async function appendRunLog(event,detail=""){
-  const stored=await chrome.storage.local.get("updateRunLog");
-  const rows=Array.isArray(stored.updateRunLog)?stored.updateRunLog:[];
+async function appendRunLog(event,detail="",localBase=LOCAL_BASE){
+  const key=instanceStorageKey("updateRunLog",localBase);
+  const stored=await chrome.storage.local.get(key);
+  const rows=Array.isArray(stored[key])?stored[key]:[];
   rows.push({time:new Date().toLocaleString("zh-CN",{hour12:false}),event,detail:String(detail||"")});
-  await chrome.storage.local.set({updateRunLog:rows.slice(-30)});
+  await chrome.storage.local.set({[key]:rows.slice(-30)});
 }
 
-async function reconcileUpdateRuntime(){
-  const stored=await chrome.storage.local.get(["updateRuntime","autoSchedule"]);
-  const runtime=stored.updateRuntime||{};
+async function reconcileUpdateRuntime(localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
+  const runtimeKey=instanceStorageKey("updateRuntime",localBase),scheduleKey=instanceStorageKey("autoSchedule",localBase);
+  const stored=await chrome.storage.local.get([runtimeKey,scheduleKey]);
+  const runtime=stored[runtimeKey]||{};
   const runningSince=Number(runtime.runningSince||0);
   if(!runningSince)return;
   try{
-    const response=await fetchWithTimeout(`${LOCAL_BASE}/status`,{cache:"no-store"},5000);
+    const response=await fetchWithTimeout(`${localBase}/status`,{cache:"no-store"},5000);
     if(!response.ok)return;
     const status=await response.json();
     const state=String(status.state||"");
@@ -64,27 +78,27 @@ async function reconcileUpdateRuntime(){
       const detail=phase==="local"
         ?"本地计算或钉钉同步超过11分钟没有完成，已自动解除任务锁；旧数据保持不变。"
         :"CRM连接超过6分钟没有返回，已自动解除任务锁；旧数据保持不变，可以重新更新。";
-      const schedule=stored.autoSchedule||{};
+      const schedule=stored[scheduleKey]||{};
       const endedAt=new Date().toLocaleString("zh-CN",{hour12:false});
-      await postLocalStatus("error","更新已超时并自动解除",detail,"timeout");
-      await chrome.storage.local.set({autoSchedule:{...schedule,lastRun:endedAt,lastResult:detail}});
-      await chrome.storage.local.remove("updateRuntime");
-      await appendRunLog("自动解除卡住任务",detail);
+      await postLocalStatus("error","更新已超时并自动解除",detail,"timeout",localBase);
+      await chrome.storage.local.set({[scheduleKey]:{...schedule,lastRun:endedAt,lastResult:detail}});
+      await chrome.storage.local.remove(runtimeKey);
+      await appendRunLog("自动解除卡住任务",detail,localBase);
       return;
     }
     if(!["success","error"].includes(state))return;
     const statusTime=Date.parse(String(status.time||"").replace(" ","T"));
     if(!Number.isFinite(statusTime)||statusTime+5000<runningSince)return;
-    const schedule=stored.autoSchedule||{};
+    const schedule=stored[scheduleKey]||{};
     const success=status.state==="success";
-    await chrome.storage.local.set({autoSchedule:{
+    await chrome.storage.local.set({[scheduleKey]:{
       ...schedule,
       lastRun:String(status.time||new Date().toLocaleString("zh-CN",{hour12:false})),
       lastResult:success?"更新成功":String(status.detail||status.message||"更新失败"),
       ...(success?{lastSuccessKey:runtime.slotKey||schedule.lastSuccessKey||"",lastSuccessAt:String(status.time||new Date().toLocaleString("zh-CN",{hour12:false}))}:{})
     }});
-    await chrome.storage.local.remove("updateRuntime");
-    await appendRunLog(success?"自动恢复成功状态":"自动恢复失败状态",status.message||status.detail||"");
+    await chrome.storage.local.remove(runtimeKey);
+    await appendRunLog(success?"自动恢复成功状态":"自动恢复失败状态",status.message||status.detail||"",localBase);
   }catch{}
 }
 
@@ -99,7 +113,7 @@ async function waitForTabReady(tabId,timeout=20000){
   });
 }
 
-async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0){
+async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0,localBase=LOCAL_BASE){
   let tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录CRM后台；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
@@ -269,10 +283,10 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
     const frameChanged=/Frame with ID \d+ was removed|No frame with id|frame was detached|Cannot find context with specified id|The tab was closed|tab was discarded/i.test(text);
     if(frameChanged&&reconnectAttempt<3){
       const attempt=reconnectAttempt+1;
-      await appendRunLog("CRM页面框架已刷新，自动重连",`第 ${attempt}/3 次：${text}`);
-      await postLocalStatus("running","CRM页面刚刚刷新，正在自动重新连接…",`自动恢复 ${attempt}/3；无需手动操作`,"crm");
+      await appendRunLog("CRM页面框架已刷新，自动重连",`第 ${attempt}/3 次：${text}`,localBase);
+      await postLocalStatus("running","CRM页面刚刚刷新，正在自动重新连接…",`自动恢复 ${attempt}/3；无需手动操作`,"crm",localBase);
       await new Promise(resolve=>setTimeout(resolve,1200*attempt));
-      return fetchInCrm(classes,excludedTeachers,attempt);
+      return fetchInCrm(classes,excludedTeachers,attempt,localBase);
     }
     const message=text.includes("CRM_LOGIN_EXPIRED")?"当前Chrome的CRM登录已失效，请重新登录后重试。":text.includes("CRM_TOTAL_TIMEOUT")||text.includes("aborted")?"CRM读取超过4分钟，已自动终止；系统将在15分钟后自动重试。":`CRM读取失败：${text}`;
     return {ok:false,error:message};
@@ -459,26 +473,29 @@ function nextWeeklyTime(day,value){
   return next.getTime();
 }
 
-async function rebuildScheduleAlarms(schedule){
+async function rebuildScheduleAlarms(schedule,localBase=LOCAL_BASE){
+  const prefix=instanceAlarmPrefix(localBase),watchdog=`${prefix}-watchdog`;
   const alarms=await chrome.alarms.getAll();
-  await Promise.all(alarms.filter(x=>x.name.startsWith("codemao-update-")||x.name==="codemao-watchdog").map(x=>chrome.alarms.clear(x.name)));
+  await Promise.all(alarms.filter(x=>x.name.startsWith(`${prefix}-`)||x.name===watchdog||(prefix==="codemao-update"&&x.name==="codemao-watchdog")).map(x=>chrome.alarms.clear(x.name)));
   if(!schedule.enabled)return;
   for(const day of schedule.days)for(const time of schedule.times){
-    const name=`codemao-update-${day}-${time.replace(":","")}`;
+    const name=`${prefix}-${day}-${time.replace(":","")}`;
     chrome.alarms.create(name,{when:nextWeeklyTime(day,time),periodInMinutes:7*24*60});
   }
-  chrome.alarms.create("codemao-watchdog",{delayInMinutes:1,periodInMinutes:1});
+  chrome.alarms.create(watchdog,{delayInMinutes:1,periodInMinutes:1});
 }
 
-async function setSchedule(schedule){
-  const old=(await chrome.storage.local.get("autoSchedule")).autoSchedule||{};
+async function setSchedule(schedule,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
+  const scheduleKey=instanceStorageKey("autoSchedule",localBase);
+  const old=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||{};
   const enabled=Boolean(schedule?.enabled);
   const days=[...new Set((schedule?.days||[1,2,3,4,5,6,0]).map(Number).filter(x=>x>=0&&x<=6))];
   const times=[...new Set((schedule?.times||[schedule?.time||"09:00"]).filter(x=>/^\d{2}:\d{2}$/.test(x)))].sort();
   const saved={enabled,days,times,lastRun:old.lastRun||"",lastResult:old.lastResult||"",lastSuccessKey:old.lastSuccessKey||"",lastSuccessAt:old.lastSuccessAt||"",lastAttemptKey:old.lastAttemptKey||"",lastAttemptAt:Number(old.lastAttemptAt||0)};
-  await chrome.storage.local.set({autoSchedule:saved});
-  await rebuildScheduleAlarms(saved);
-  setTimeout(checkMissedSchedules,250);
+  await chrome.storage.local.set({[scheduleKey]:saved});
+  await rebuildScheduleAlarms(saved,localBase);
+  setTimeout(()=>checkMissedSchedules(localBase),250);
   return saved;
 }
 
@@ -488,12 +505,13 @@ function utf8Base64(text){
   return btoa(binary);
 }
 
-async function waitForLocalCompletion(startedAt,timeout=10*60*1000){
+async function waitForLocalCompletion(startedAt,timeout=10*60*1000,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
   const deadline=Date.now()+timeout;
   while(Date.now()<deadline){
     await new Promise(r=>setTimeout(r,2500));
     try{
-      const response=await fetchWithTimeout(`${LOCAL_BASE}/status`,{cache:"no-store"},5000);
+      const response=await fetchWithTimeout(`${localBase}/status`,{cache:"no-store"},5000);
       const status=await response.json();
       const statusTime=Date.parse(String(status.time||"").replace(" ","T"));
       if(Number.isFinite(statusTime)&&statusTime+1000<startedAt)continue;
@@ -504,12 +522,13 @@ async function waitForLocalCompletion(startedAt,timeout=10*60*1000){
   throw new Error("本地计算或钉钉同步超过10分钟，已停止等待；请查看控制台状态。 ");
 }
 
-async function waitForLocalRunner(startedAt,timeout=20*1000){
+async function waitForLocalRunner(startedAt,timeout=20*1000,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
   const deadline=Date.now()+timeout;
   while(Date.now()<deadline){
     await new Promise(resolve=>setTimeout(resolve,2000));
     try{
-      const response=await fetchWithTimeout(`${LOCAL_BASE}/status`,{cache:"no-store"},5000);
+      const response=await fetchWithTimeout(`${localBase}/status`,{cache:"no-store"},5000);
       if(!response.ok)continue;
       const status=await response.json();
       const statusTime=Date.parse(String(status.time||"").replace(" ","T"));
@@ -522,60 +541,69 @@ async function waitForLocalRunner(startedAt,timeout=20*1000){
 }
 
 async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
-  await reconcileUpdateRuntime();
+  localBase=normalizeLocalBase(localBase);
+  const runtimeKey=instanceStorageKey("updateRuntime",localBase),scheduleKey=instanceStorageKey("autoSchedule",localBase);
+  await reconcileUpdateRuntime(localBase);
   const now=Date.now();
-  const lock=(await chrome.storage.local.get("updateRuntime")).updateRuntime||{};
-  if(Number(lock.runningSince||0)&&now-Number(lock.runningSince)<18*60*1000)return {ok:false,error:"已有更新正在运行"};
-  const previousLocalBase=LOCAL_BASE;
-  LOCAL_BASE=/^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(localBase||""))?String(localBase):previousLocalBase;
-  await chrome.storage.local.set({updateRuntime:{runningSince:now,slotKey}});
-  const stored=await chrome.storage.local.get("autoSchedule");
-  const schedule=stored.autoSchedule||{};
+  const lock=(await chrome.storage.local.get(runtimeKey))[runtimeKey]||{};
+  if(Number(lock.runningSince||0)&&now-Number(lock.runningSince)<18*60*1000)return {ok:false,error:"当前工作台已有更新正在运行，请等待本轮完成"};
+  await chrome.storage.local.set({[runtimeKey]:{runningSince:now,slotKey}});
+  const stored=await chrome.storage.local.get(scheduleKey);
+  const schedule=stored[scheduleKey]||{};
   const startedText=new Date().toLocaleString("zh-CN",{hour12:false});
-  await chrome.storage.local.set({autoSchedule:{...schedule,lastRun:startedText,lastResult:"正在读取CRM数据",lastAttemptKey:slotKey,lastAttemptAt:now}});
-  await appendRunLog("开始更新",slotKey);
+  await chrome.storage.local.set({[scheduleKey]:{...schedule,lastRun:startedText,lastResult:"正在读取CRM数据",lastAttemptKey:slotKey,lastAttemptAt:now}});
+  await appendRunLog("开始更新",slotKey,localBase);
   try{
-    const payload=await waitForLocalPreparation(slotKey);
+    const payload=await waitForLocalPreparation(slotKey,2*60*1000,localBase);
+    if(payload.alreadyRunning){
+      await appendRunLog("并入正在运行的任务",slotKey,localBase);
+      const completed=await waitForLocalCompletion(0,10*60*1000,localBase);
+      const successAt=String(completed.lastSuccessTime||completed.time||new Date().toLocaleString("zh-CN",{hour12:false}));
+      const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
+      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功（已并入同一任务）",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+      return {ok:true,joined:true};
+    }
     if(payload.alreadyCompleted){
       const successAt=String(payload.lastSuccessTime||new Date().toLocaleString("zh-CN",{hour12:false}));
-      const latest=(await chrome.storage.local.get("autoSchedule")).autoSchedule||schedule;
-      await chrome.storage.local.set({autoSchedule:{...latest,lastRun:successAt,lastResult:"同一时段已由另一连接器完成",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
-      await appendRunLog("跳过重复任务",`${slotKey} 已由另一连接器完成`);
+      const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
+      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"同一时段已由另一连接器完成",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+      await appendRunLog("跳过重复任务",`${slotKey} 已由另一连接器完成`,localBase);
       return {ok:true,skipped:true};
     }
-    await postLocalStatus("running","正在读取CRM班级、课程和直播数据…","最长5分钟，超时会自动结束并允许重试","crm");
-    const crm=await fetchInCrm(payload.classes||[],payload.excludedTeachers||["薛超"]);
+    await postLocalStatus("running","正在读取CRM班级、课程和直播数据…","最长5分钟，超时会自动结束并允许重试","crm",localBase);
+    const crm=await fetchInCrm(payload.classes||[],payload.excludedTeachers||["薛超"],0,localBase);
     if(!crm.ok)throw new Error(crm.error||"CRM读取失败");
-    await postLocalStatus("running","CRM数据读取完成，正在启动本地计算…","","local");
-    const synced=await fetchWithTimeout(`${LOCAL_BASE}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+    await postLocalStatus("running","CRM数据读取完成，正在启动本地计算…","","local",localBase);
+    const synced=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
     if(!synced.ok)throw new Error("本地更新脚本启动失败");
-    if(!await waitForLocalRunner(now)){
-      await appendRunLog("本地脚本未进入计算阶段，自动重试启动",slotKey);
-      const retried=await fetchWithTimeout(`${LOCAL_BASE}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+    if(!await waitForLocalRunner(now,20*1000,localBase)){
+      await appendRunLog("本地脚本未进入计算阶段，自动重试启动",slotKey,localBase);
+      const retried=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
       if(!retried.ok)throw new Error("本地更新脚本自动重试启动失败");
     }
-    const completed=await waitForLocalCompletion(now);
-    const latest=(await chrome.storage.local.get("autoSchedule")).autoSchedule||schedule;
+    const completed=await waitForLocalCompletion(now,10*60*1000,localBase);
+    const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
     const successAt=new Date().toLocaleString("zh-CN",{hour12:false});
-    await chrome.storage.local.set({autoSchedule:{...latest,lastRun:successAt,lastResult:"更新成功",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
-    await appendRunLog("更新成功",completed.message||slotKey);
+    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+    await appendRunLog("更新成功",completed.message||slotKey,localBase);
     return {ok:true};
   }catch(error){
     const message=String(error?.message||error);
-    const latest=(await chrome.storage.local.get("autoSchedule")).autoSchedule||schedule;
-    await chrome.storage.local.set({autoSchedule:{...latest,lastRun:new Date().toLocaleString("zh-CN",{hour12:false}),lastResult:message}});
-    await appendRunLog("更新失败",message);
-    await postLocalStatus("error","自动更新失败",message);
+    const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
+    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:new Date().toLocaleString("zh-CN",{hour12:false}),lastResult:message}});
+    await appendRunLog("更新失败",message,localBase);
+    await postLocalStatus("error","自动更新失败",message,"crm",localBase);
     return {ok:false,error:message};
   }finally{
-    await chrome.storage.local.remove("updateRuntime");
-    LOCAL_BASE=previousLocalBase;
+    await chrome.storage.local.remove(runtimeKey);
   }
 }
 
-async function checkMissedSchedules(){
-  await reconcileUpdateRuntime();
-  const schedule=(await chrome.storage.local.get("autoSchedule")).autoSchedule||{};
+async function checkMissedSchedules(localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
+  const scheduleKey=instanceStorageKey("autoSchedule",localBase);
+  await reconcileUpdateRuntime(localBase);
+  const schedule=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||{};
   if(!schedule.enabled||!(schedule.days||[]).includes(new Date().getDay()))return;
   const now=new Date(),today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
   const due=(schedule.times||[]).filter(value=>{const [h,m]=value.split(":").map(Number);return h*60+m<=now.getHours()*60+now.getMinutes();}).sort();
@@ -588,41 +616,41 @@ async function checkMissedSchedules(){
   const lastSuccessAt=Date.parse(successText)||Date.parse(successText.replace(" ","T"));
   if(Number.isFinite(lastSuccessAt)&&lastSuccessAt>=dueAt.getTime())return;
   if(schedule.lastAttemptKey===key&&Date.now()-Number(schedule.lastAttemptAt||0)<2*60*1000)return;
-  await appendRunLog("检测到漏跑并补跑",`${today} ${time}`);
-  return runScheduledUpdate(key);
+  await appendRunLog("检测到漏跑并补跑",`${today} ${time}`,localBase);
+  return runScheduledUpdate(key,localBase);
 }
 
-async function ensureScheduleHealth(force=false){
-  await reconcileUpdateRuntime();
-  const schedule=(await chrome.storage.local.get("autoSchedule")).autoSchedule;
+async function ensureScheduleHealth(force=false,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
+  const scheduleKey=instanceStorageKey("autoSchedule",localBase),prefix=instanceAlarmPrefix(localBase);
+  await reconcileUpdateRuntime(localBase);
+  const schedule=(await chrome.storage.local.get(scheduleKey))[scheduleKey];
   if(schedule?.enabled){
-    const expected=["codemao-watchdog",...schedule.days.flatMap(day=>schedule.times.map(time=>`codemao-update-${day}-${time.replace(":","")}`))];
+    const expected=[`${prefix}-watchdog`,...schedule.days.flatMap(day=>schedule.times.map(time=>`${prefix}-${day}-${time.replace(":","")}`))];
     const existing=new Set((await chrome.alarms.getAll()).map(x=>x.name));
-    if(force||expected.some(name=>!existing.has(name)))await rebuildScheduleAlarms(schedule);
-    await checkMissedSchedules();
+    if(force||expected.some(name=>!existing.has(name)))await rebuildScheduleAlarms(schedule,localBase);
+    await checkMissedSchedules(localBase);
   }
 }
 
 chrome.alarms.onAlarm.addListener(async alarm=>{
-  if(alarm.name==="codemao-watchdog")return checkMissedSchedules();
-  if(alarm.name.startsWith("codemao-update-")){
+  if(alarm.name==="codemao-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8765");
+  if(alarm.name==="codemao-test-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8766");
+  if(alarm.name.startsWith("codemao-update-")||alarm.name.startsWith("codemao-test-update-")){
     const now=new Date(),today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-    let localBase=LOCAL_BASE;
-    if(alarm.name.startsWith("codemao-update-manual-")){
-      localBase=String((await chrome.storage.local.get("manualLocalBase")).manualLocalBase||LOCAL_BASE);
-      await chrome.storage.local.remove("manualLocalBase");
-    }
+    const localBase=alarm.name.startsWith("codemao-test-update-")?"http://127.0.0.1:8766":"http://127.0.0.1:8765";
     return runScheduledUpdate(`${alarm.name}|${today}`,localBase);
   }
 });
-chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true)});
-chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true)});
+chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();ensureScheduleHealth(true,"http://127.0.0.1:8765");return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
+chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();ensureScheduleHealth(true,"http://127.0.0.1:8765");return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
 injectDashboardBridge();
-ensureScheduleHealth(false);
+ensureScheduleHealth(false,"http://127.0.0.1:8765");
+ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"utf8-live-invariants-17"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"isolated-runtime-locks-18"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome().then(sendResponse);return true;}
@@ -632,11 +660,12 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       .catch(error=>sendResponse({ok:false,error:`教学服务数据读取失败：${String(error?.message||error)}`}));
     return true;
   }
-  if(message.type==="get-schedule"){reconcileUpdateRuntime().then(()=>chrome.storage.local.get("autoSchedule")).then(x=>sendResponse({ok:true,version:chrome.runtime.getManifest().version,schedule:x.autoSchedule||{enabled:false,days:[1,2,3,4,5],times:["09:00"],lastRun:"",lastResult:""}}));return true;}
-  if(message.type==="set-schedule"){setSchedule(message.schedule||{}).then(schedule=>sendResponse({ok:true,schedule}));return true;}
+  if(message.type==="get-schedule"){const localBase=normalizeLocalBase(message.localBase);const key=instanceStorageKey("autoSchedule",localBase);reconcileUpdateRuntime(localBase).then(()=>chrome.storage.local.get(key)).then(x=>sendResponse({ok:true,version:chrome.runtime.getManifest().version,schedule:x[key]||{enabled:false,days:[1,2,3,4,5],times:["09:00"],lastRun:"",lastResult:""}}));return true;}
+  if(message.type==="set-schedule"){const localBase=normalizeLocalBase(message.localBase);setSchedule(message.schedule||{},localBase).then(schedule=>sendResponse({ok:true,schedule}));return true;}
   if(message.type==="run-scheduled-now"){
     const localBase=/^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(message.localBase||""))?String(message.localBase):LOCAL_BASE;
-    chrome.storage.local.set({manualLocalBase:localBase}).then(()=>chrome.alarms.create(`codemao-update-manual-${Date.now()}`,{when:Date.now()+250})).then(()=>sendResponse({ok:true,started:true}));
+    const prefix=instanceAlarmPrefix(localBase);
+    chrome.alarms.create(`${prefix}-manual-${Date.now()}`,{when:Date.now()+250}).then(()=>sendResponse({ok:true,started:true}));
     return true;
   }
 });
