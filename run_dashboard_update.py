@@ -165,10 +165,10 @@ def credentials() -> tuple[str, str]:
     configured = dashboard_config()
     configured_url = str(configured.get("dingtalkConnectionUrl") or "").strip()
     configured_token = str(configured.get("dingtalkAccessKey") or "").strip()
-    if configured_url and configured_token:
+    if configured_url:
         return configured_url, configured_token
     if not LEGACY_SYNC.exists():
-        raise RuntimeError("请先在工作台配置面板填写钉钉连接地址和访问密钥")
+        raise RuntimeError("请先在工作台配置面板填写钉钉连接地址")
     text = LEGACY_SYNC.read_text(encoding="utf-8", errors="ignore")
     url = re.search(r'MCP_URL\s*=\s*"([^"]+)"', text)
     token = re.search(r'ACCESS_TOKEN\s*=\s*"([^"]+)"', text)
@@ -185,7 +185,10 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
     body = json.dumps(payload).encode("utf-8")
     result = None
     for attempt in range(1, attempts + 1):
-        request = urllib.request.Request(MCP_URL, data=body, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer " + MCP_TOKEN})
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if MCP_TOKEN:
+            headers["Authorization"] = "Bearer " + MCP_TOKEN
+        request = urllib.request.Request(MCP_URL, data=body, method="POST", headers=headers)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
             with opener.open(request, timeout=timeout) as response:

@@ -55,16 +55,16 @@ function validateSource(headers,rows) {
 }
 
 function readMcpCredentials() {
-  if (DASHBOARD_SETTINGS.dingtalkConnectionUrl && DASHBOARD_SETTINGS.dingtalkAccessKey) {
-    return {url:DASHBOARD_SETTINGS.dingtalkConnectionUrl,token:DASHBOARD_SETTINGS.dingtalkAccessKey};
+  if (DASHBOARD_SETTINGS.dingtalkConnectionUrl) {
+    return {url:DASHBOARD_SETTINGS.dingtalkConnectionUrl,token:DASHBOARD_SETTINGS.dingtalkAccessKey || ""};
   }
   const file = CREDENTIAL_FILES.find(candidate => fs.existsSync(candidate));
   if (!file) throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND");
   const text = fs.readFileSync(file,"utf8");
   const url = text.match(/MCP_URL\s*=\s*["']([^"']+)["']/)?.[1];
   const token = text.match(/ACCESS_TOKEN\s*=\s*["']([^"']+)["']/)?.[1];
-  if (!url || !token) throw new Error("DINGTALK_MCP_CONFIG_INVALID");
-  return {url,token};
+  if (!url) throw new Error("DINGTALK_MCP_CONFIG_INVALID");
+  return {url,token:token || ""};
 }
 
 async function mcpCall(name,args,timeoutMs=180000) {
@@ -72,7 +72,9 @@ async function mcpCall(name,args,timeoutMs=180000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(),timeoutMs);
   try {
-    const response = await fetch(url,{method:"POST",headers:{"content-type":"application/json","accept":"application/json","authorization":`Bearer ${token}`},body:JSON.stringify({jsonrpc:"2.0",method:"tools/call",params:{name,arguments:args},id:1}),signal:controller.signal});
+    const headers = {"content-type":"application/json","accept":"application/json"};
+    if (token) headers.authorization = `Bearer ${token}`;
+    const response = await fetch(url,{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",method:"tools/call",params:{name,arguments:args},id:1}),signal:controller.signal});
     if (!response.ok) throw new Error(`DINGTALK_MCP_HTTP_${response.status}`);
     const envelope = await response.json();
     if (envelope.error) throw new Error(`DINGTALK_MCP_ERROR:${JSON.stringify(envelope.error)}`);

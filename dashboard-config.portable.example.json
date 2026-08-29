@@ -3,7 +3,7 @@
   "displaySubtitle": "组内教学数据展示系统",
   "workbookUrl": "",
   "dingtalkConnectionUrl": "",
-  "dingtalkAccessKey": "",
+  "portableMode": true,
   "renewalWorkbookUrl": "",
   "renewalSheetId": "",
   "serviceWorkbookUrl": "",

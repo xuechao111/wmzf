@@ -74,11 +74,12 @@ function Get-DashboardConfig {
         shareTitle = '深圳战区 · 屹柯组教学数据共享看板'
         hasShareAccessKey = $false
         isTestInstance = ($env:HF_DASHBOARD_INSTANCE -eq 'test' -or $root -ne $sourceRoot)
+        portableMode = $false
     }
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','serviceWorkbookUrl','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle')) {
+            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','serviceWorkbookUrl','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -94,7 +95,7 @@ function Get-DashboardConfig {
     $workbook = ([string]$defaults.workbookUrl).Trim()
     if ([string]::IsNullOrWhiteSpace($workbook) -or $workbook -eq 'https://alidocs.dingtalk.com/' -or $workbook -match '请替换|请填写') { $issues += '教学数据钉钉文档链接' }
     if ([string]::IsNullOrWhiteSpace(([string]$defaults.dingtalkConnectionUrl).Trim())) { $issues += '钉钉 MCP 连接地址' }
-    if (-not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
+    if (-not ($defaults.portableMode -eq $true -or $defaults.isTestInstance -eq $true) -and -not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
     $defaults.teachingConfigurationIssues = $issues
     $defaults.teachingReady = ($issues.Count -eq 0)
     return [pscustomobject]$defaults
@@ -123,13 +124,13 @@ function Save-DashboardConfig($bodyText) {
     $existingConfig = $null
     if (Test-Path -LiteralPath $dashboardConfigFile) { try { $existingConfig = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
     $connectionUrl = ([string]$payload.dingtalkConnectionUrl).Trim()
-    $connectionKey = ([string]$payload.dingtalkAccessKey).Trim()
-    if ([string]::IsNullOrWhiteSpace($connectionKey) -and $existingConfig) { $connectionKey = [string]$existingConfig.dingtalkAccessKey }
+    $connectionKey = if ($existingConfig) { [string]$existingConfig.dingtalkAccessKey } else { '' }
+    $portableMode = ($payload.portableMode -eq $true) -or ($existingConfig -and $existingConfig.portableMode -eq $true) -or ($env:HF_DASHBOARD_INSTANCE -eq 'test') -or ($root -ne $sourceRoot)
     if (-not [string]::IsNullOrWhiteSpace($connectionUrl) -and $connectionUrl -notmatch '^https://') { throw '钉钉连接地址必须使用 HTTPS。' }
     if (-not [string]::IsNullOrWhiteSpace($workbook) -and $workbook -ne $dashboardUrl) {
         $missing = @()
         if ([string]::IsNullOrWhiteSpace($connectionUrl)) { $missing += '钉钉 MCP 连接地址' }
-        if ([string]::IsNullOrWhiteSpace($connectionKey)) { $missing += '钉钉 MCP 访问密钥' }
+        if (-not $portableMode -and [string]::IsNullOrWhiteSpace($connectionKey)) { $missing += '钉钉 MCP 访问密钥' }
         if ($missing.Count -gt 0) { throw ('教学数据配置尚未完成，缺少：' + ($missing -join '、')) }
     }
     $config = [ordered]@{
@@ -138,6 +139,7 @@ function Save-DashboardConfig($bodyText) {
         workbookUrl = $workbook.Trim()
         dingtalkConnectionUrl = $connectionUrl
         dingtalkAccessKey = $connectionKey
+        portableMode = $portableMode
         renewalWorkbookUrl = $renewalWorkbook
         renewalSheetId = ([string]$payload.renewalSheetId).Trim()
         serviceWorkbookUrl = $serviceWorkbook
@@ -396,8 +398,8 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
     }
     if ($prepareProcess.ExitCode -ne 0 -or -not (Test-Path $response)) {
         $config = Get-DashboardConfig
-        $detail = if (@($config.classes).Count -eq 0 -and ([string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl) -or -not $config.hasDingtalkAccessKey)) {
-            '配置不完整：请填写钉钉连接地址和访问密钥，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
+        $detail = if (@($config.classes).Count -eq 0 -and [string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl)) {
+            '配置不完整：请填写钉钉连接地址，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
         } elseif ($prepareOutput.Count -gt 0) {
             '读取班级配置失败：' + [string]$prepareOutput[-1]
         } else {
