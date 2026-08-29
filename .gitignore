@@ -17,6 +17,7 @@ console-response.json
 status.json
 self-update-status.json
 setup-report.txt
+bridge-request-errors.log
 
 # Runtime artifacts
 *.log

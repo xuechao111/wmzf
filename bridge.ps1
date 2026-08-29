@@ -2,7 +2,14 @@
 Add-Type -AssemblyName System.Web
 
 $port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8765 }
-$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
+    $env:HF_DASHBOARD_SOURCE_ROOT
+} elseif (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} else {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+$sourceRoot = [IO.Path]::GetFullPath($sourceRoot)
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 if (-not (Test-Path -LiteralPath $root)) { [void](New-Item -ItemType Directory -Path $root -Force) }
@@ -24,6 +31,7 @@ $serviceDataFile = Join-Path $root 'service-data.json'
 $serviceRunner = Join-Path $sourceRoot 'run-service-update.ps1'
 $selfUpdateRunner = Join-Path $sourceRoot 'self-update.ps1'
 $selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
+$bridgeErrorLog = Join-Path $root 'bridge-request-errors.log'
 $staleStageSeconds = 360
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 
@@ -630,6 +638,7 @@ while ($true) {
             default { Send-Json $stream 'Operation not found.' '404 Not Found' }
         }
     } catch {
+        try { Add-Content -LiteralPath $bridgeErrorLog -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " | " + $path + " | " + $_.Exception.Message) -Encoding UTF8 } catch {}
         if ($stream) { try { Send-Json $stream 'Local service request failed.' '500 Internal Server Error' } catch {} }
     } finally {
         if ($stream) { $stream.Dispose() }
