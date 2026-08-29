@@ -57,6 +57,11 @@ function Get-ShareConfig {
     catch { return $null }
 }
 
+function Test-EmbeddedMcpAuthorization([string]$connectionUrl) {
+    if ([string]::IsNullOrWhiteSpace($connectionUrl)) { return $false }
+    return $connectionUrl -match '^https://mcp-gw\.dingtalk\.com/' -and $connectionUrl -match '[?&]key=[^&]+'
+}
+
 function Get-DashboardConfig {
     $defaults = [ordered]@{
         displayTitle = '深圳战区 · 屹柯组'
@@ -83,6 +88,7 @@ function Get-DashboardConfig {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
+            if (Test-EmbeddedMcpAuthorization ([string]$saved.dingtalkConnectionUrl)) { $defaults.portableMode = $true }
         } catch {}
     }
     $share = Get-ShareConfig
@@ -125,7 +131,7 @@ function Save-DashboardConfig($bodyText) {
     if (Test-Path -LiteralPath $dashboardConfigFile) { try { $existingConfig = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
     $connectionUrl = ([string]$payload.dingtalkConnectionUrl).Trim()
     $connectionKey = if ($existingConfig) { [string]$existingConfig.dingtalkAccessKey } else { '' }
-    $portableMode = ($payload.portableMode -eq $true) -or ($existingConfig -and $existingConfig.portableMode -eq $true) -or ($env:HF_DASHBOARD_INSTANCE -eq 'test') -or ($root -ne $sourceRoot)
+    $portableMode = ($payload.portableMode -eq $true) -or ($existingConfig -and $existingConfig.portableMode -eq $true) -or (Test-EmbeddedMcpAuthorization $connectionUrl) -or ($env:HF_DASHBOARD_INSTANCE -eq 'test') -or ($root -ne $sourceRoot)
     if (-not [string]::IsNullOrWhiteSpace($connectionUrl) -and $connectionUrl -notmatch '^https://') { throw '钉钉连接地址必须使用 HTTPS。' }
     if (-not [string]::IsNullOrWhiteSpace($workbook) -and $workbook -ne $dashboardUrl) {
         $missing = @()
