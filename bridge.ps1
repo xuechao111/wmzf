@@ -90,6 +90,13 @@ function Get-DashboardConfig {
         if (-not [string]::IsNullOrWhiteSpace([string]$share.title)) { $defaults.shareTitle = [string]$share.title }
         $defaults.hasShareAccessKey = -not [string]::IsNullOrWhiteSpace([string]$share.accessKey)
     }
+    $issues = @()
+    $workbook = ([string]$defaults.workbookUrl).Trim()
+    if ([string]::IsNullOrWhiteSpace($workbook) -or $workbook -eq 'https://alidocs.dingtalk.com/' -or $workbook -match '请替换|请填写') { $issues += '教学数据钉钉文档链接' }
+    if ([string]::IsNullOrWhiteSpace(([string]$defaults.dingtalkConnectionUrl).Trim())) { $issues += '钉钉 MCP 连接地址' }
+    if (-not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
+    $defaults.teachingConfigurationIssues = $issues
+    $defaults.teachingReady = ($issues.Count -eq 0)
     return [pscustomobject]$defaults
 }
 
@@ -119,6 +126,12 @@ function Save-DashboardConfig($bodyText) {
     $connectionKey = ([string]$payload.dingtalkAccessKey).Trim()
     if ([string]::IsNullOrWhiteSpace($connectionKey) -and $existingConfig) { $connectionKey = [string]$existingConfig.dingtalkAccessKey }
     if (-not [string]::IsNullOrWhiteSpace($connectionUrl) -and $connectionUrl -notmatch '^https://') { throw '钉钉连接地址必须使用 HTTPS。' }
+    if (-not [string]::IsNullOrWhiteSpace($workbook) -and $workbook -ne $dashboardUrl) {
+        $missing = @()
+        if ([string]::IsNullOrWhiteSpace($connectionUrl)) { $missing += '钉钉 MCP 连接地址' }
+        if ([string]::IsNullOrWhiteSpace($connectionKey)) { $missing += '钉钉 MCP 访问密钥' }
+        if ($missing.Count -gt 0) { throw ('教学数据配置尚未完成，缺少：' + ($missing -join '、')) }
+    }
     $config = [ordered]@{
         displayTitle = ([string]$payload.displayTitle).Trim()
         displaySubtitle = ([string]$payload.displaySubtitle).Trim()
@@ -442,13 +455,18 @@ function Invoke-LegacyUpdate {
 }
 
 if (-not (Test-Path -LiteralPath $statusFile)) {
-    Write-StatusObject 'idle' '测试工作台已就绪，尚未执行数据更新。' '请先在配置面板填写专用测试工作簿；正式工作台不受影响。'
+    $initialConfig = Get-DashboardConfig
+    if ($initialConfig.teachingReady) {
+        Write-StatusObject 'idle' '工作台已就绪，尚未执行数据更新。' '请确认 Chrome 已登录 CRM 并已启用连接器。'
+    } else {
+        Write-StatusObject 'idle' '工作台已启动，教学数据配置尚未完成。' ('缺少：' + (@($initialConfig.teachingConfigurationIssues) -join '、'))
+    }
 }
 if (-not (Test-Path -LiteralPath $scholarshipStatusFile)) {
     Write-ScholarshipStatusObject 'idle' '尚未配置或更新续费表格数据。' '请在配置面板填写专用续费工作簿和子表 ID。'
 }
 if (-not (Test-Path -LiteralPath $serviceStatusFile)) {
-    $serviceInitial = [ordered]@{state='idle';message='尚未更新教学服务数据。';detail='测试工作台使用独立状态与输出文件。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt='';lastSuccessTime=''} | ConvertTo-Json -Compress
+    $serviceInitial = [ordered]@{state='idle';message='尚未更新教学服务数据。';detail='完成配置后可从当前 Chrome 页面更新。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt='';lastSuccessTime=''} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($serviceStatusFile,$serviceInitial,$utf8NoBom)
 }
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any,$port)
