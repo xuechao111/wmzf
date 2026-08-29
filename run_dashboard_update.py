@@ -225,10 +225,31 @@ def load_sheet_ids(refresh: bool = False) -> dict[str, str]:
     if SHEET_IDS and not refresh:
         return SHEET_IDS
     listing = mcp_call("get_all_sheets", {"nodeId": WORKBOOK})
-    sheets = listing.get("sheets", []) if isinstance(listing, dict) else []
+
+    def sheet_list(value):
+        if isinstance(value, list) and (not value or all(isinstance(item, dict) for item in value)):
+            if not value or any(item.get("name") or item.get("sheetId") for item in value):
+                return value
+        if isinstance(value, dict):
+            for key in ("sheets", "items", "data", "result"):
+                if key in value:
+                    found = sheet_list(value[key])
+                    if found is not None:
+                        return found
+            for child in value.values():
+                found = sheet_list(child)
+                if found is not None:
+                    return found
+        return None
+
+    sheets = sheet_list(listing) or []
     SHEET_IDS.clear()
-    SHEET_IDS.update({str(sheet.get("name") or ""): str(sheet.get("sheetId") or sheet.get("name") or "") for sheet in sheets})
+    SHEET_IDS.update({str(sheet.get("name") or ""): str(sheet.get("sheetId") or sheet.get("id") or sheet.get("name") or "") for sheet in sheets})
     return SHEET_IDS
+
+
+def normalize_sheet_name(value: object) -> str:
+    return re.sub(r"[\s_\-]+", "", str(value or "")).casefold()
 
 
 def find_rows(value):
@@ -248,15 +269,23 @@ def read_classes() -> list[list[int]]:
     configured = configured_classes()
     if configured:
         return configured
-    result = mcp_call("get_range", {"nodeId": WORKBOOK, "sheetId": "班级id", "range": "A:F"})
+    sheet_ids = load_sheet_ids()
+    aliases = {"班级id", "班级配置", "班级信息"}
+    target = next(((name, sheet_id) for name, sheet_id in sheet_ids.items() if normalize_sheet_name(name) in aliases), None)
+    if target is None:
+        available = "、".join(name for name in sheet_ids if name) or "（未返回任何子表）"
+        raise RuntimeError(f"未找到“班级id”子表；当前工作簿子表：{available}")
+    sheet_name, sheet_id = target
+    result = mcp_call("get_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": "A:F"})
     rows = find_rows(result) or []
     if len(rows) < 2:
-        raise RuntimeError("班级id 工作表没有可用数据")
-    headers = [str(x or "").strip().lower() for x in rows[0]]
-    class_col = next((i for i, h in enumerate(headers) if h.replace(" ", "") == "班级id"), None)
-    term_col = next((i for i, h in enumerate(headers) if h.replace(" ", "") == "主课期id"), None)
+        raise RuntimeError(f"“{sheet_name}”子表没有可用数据，请确认第1行为表头、第2行起为班级")
+    headers = [normalize_sheet_name(x) for x in rows[0]]
+    class_col = next((i for i, h in enumerate(headers) if h in {"班级id", "班级编号", "班级号"}), None)
+    term_col = next((i for i, h in enumerate(headers) if h in {"主课期id", "主课期", "课期id"}), None)
     if class_col is None or term_col is None:
-        raise RuntimeError("班级id 工作表缺少“班级id”或“主课期id”列")
+        visible_headers = "、".join(str(x or "").strip() for x in rows[0] if str(x or "").strip())
+        raise RuntimeError(f"“{sheet_name}”子表缺少“班级id”或“主课期id”列；当前表头：{visible_headers}")
     pairs = []
     for row in rows[1:]:
         try:
