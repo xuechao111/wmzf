@@ -115,15 +115,7 @@ async function waitForTabReady(tabId,timeout=20000){
   });
 }
 
-async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0,localBase=LOCAL_BASE){
-  let tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
-  if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录CRM后台；控制台不会另开页面。"};
-  const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
-  try{
-    await waitForTabReady(tab.id);
-    const results=await Promise.race([chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[classes,excludedTeachers],
-      func:async (classes,excludedTeachers)=>{
+async function collectCrmData(classes,excludedTeachers=["薛超"]){
         const deadline=Date.now()+4*60*1000;
         const api=async(url,options)=>{
           let lastError;
@@ -279,21 +271,31 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
         const brokenNames=output.filter(block=>String(block.info?.teacherName||"").includes("�"));
         if(brokenNames.length)throw new Error(`CRM_TEXT_ENCODING_INVALID:${brokenNames.map(x=>x.classId).join(",")}`);
         return JSON.stringify(output);
-      }
-    }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_TOTAL_TIMEOUT")),5*60*1000))]);
-    return {ok:true,data:results[0]?.result||"[]"};
+}
+
+async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0,localBase=LOCAL_BASE){
+  const tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
+  if(!tabs.length)return {ok:false,error:"请先在当前浏览器打开并登录CRM后台；控制台不会另开页面。"};
+  const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
+  try{
+    await waitForTabReady(tab.id);
+    // Run API calls in the extension service worker. Host permissions allow
+    // authenticated CRM requests without depending on page-frame lifetime or
+    // page CORS, which previously caused intermittent `Failed to fetch`.
+    const data=await Promise.race([
+      collectCrmData(classes,excludedTeachers),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_TOTAL_TIMEOUT")),5*60*1000)),
+    ]);
+    return {ok:true,data};
   }catch(error){
     const text=String(error?.message||error);
     const frameChanged=/Frame with ID \d+ was removed|No frame with id|frame was detached|Cannot find context with specified id|The tab was closed|tab was discarded/i.test(text);
     const networkFailed=/Failed to fetch|NetworkError|ERR_|CRM_REQUEST_FAILED/i.test(text);
-    if((frameChanged||networkFailed)&&reconnectAttempt<3){
+    if((frameChanged||networkFailed)&&reconnectAttempt<1){
       const attempt=reconnectAttempt+1;
-      const reason=frameChanged?"CRM页面框架已刷新":"CRM网络请求中断";
-      await appendRunLog(`${reason}，自动重连`,`第 ${attempt}/3 次：${text}`,localBase);
-      await postLocalStatus("running",`${reason}，正在自动恢复…`,`自动刷新CRM页面并重连 ${attempt}/3；无需手动操作`,"crm",localBase);
-      if(networkFailed){
-        try{await chrome.tabs.reload(tab.id,{bypassCache:true});await waitForTabReady(tab.id,30000);}catch{}
-      }
+      const reason=frameChanged?"CRM页面状态发生变化":"CRM接口连接中断";
+      await appendRunLog(`${reason}，自动重试`,`第 ${attempt}/1 次：${text}`,localBase);
+      await postLocalStatus("running",`${reason}，正在自动恢复…`,`后台连接重试 ${attempt}/1；无需刷新CRM页面`,"crm",localBase);
       await new Promise(resolve=>setTimeout(resolve,1200*attempt));
       return fetchInCrm(classes,excludedTeachers,attempt,localBase);
     }
