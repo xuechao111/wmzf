@@ -290,12 +290,15 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
 
 function Invoke-ServiceExtensionUpdate($bodyText) {
     Repair-ServiceStatus
+    $payload=$bodyText|ConvertFrom-Json
     $current = if (Test-Path $serviceStatusFile) { try { Get-Content $serviceStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null } } else { $null }
-    if ($current -and [string]$current.state -eq 'running') { throw '教学服务数据正在更新，请等待本轮完成。' }
-    $payload=$bodyText|ConvertFrom-Json;$bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
+    $runId=[string]$payload.runId
+    $sameClientRun=$current-and[string]$current.state-eq'running'-and[string]$current.phase-eq'client'-and[string]$current.runId-eq$runId-and-not[string]::IsNullOrWhiteSpace($runId)
+    if ($current -and [string]$current.state -eq 'running' -and -not $sameClientRun) { throw '教学服务数据正在更新，请等待本轮完成。' }
+    $bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
     if(!$parsed -or !$parsed.im -or !$parsed.wecom){throw '当前Chrome返回的教学服务数据不完整。'}
     $sourceFile=Join-Path $root 'service-source.json';[IO.File]::WriteAllBytes($sourceFile,$bytes);$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom)
+    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';phase='writer';runId=$runId;message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom)
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$serviceRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return '教学服务数据已接收，正在更新子表。'
 }
@@ -315,7 +318,23 @@ function Repair-ServiceStatus {
     } catch {}
 }
 
-function Set-ServiceClientStatus($bodyText) {$payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss';$current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null};$lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$state=if([string]$payload.state-eq'running'){'running'}else{'error'};$message=if($payload.message){[string]$payload.message}elseif($state-eq'running'){'正在读取当前Chrome中的IM与企微看板…'}else{'教学服务数据更新未启动'};$startedAt=if($state-eq'running'){$now}elseif($current-and$current.startedAt){[string]$current.startedAt}else{$now};$status=[ordered]@{state=$state;message=$message;detail=[string]$payload.detail;time=$now;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom);return '教学服务客户端状态已记录。'}
+function Set-ServiceClientStatus($bodyText) {
+    $payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null}
+    $runId=[string]$payload.runId;$state=if([string]$payload.state-eq'running'){'running'}else{'error'}
+    if($current-and[string]$current.state-eq'running'){
+        if([string]$current.phase-eq'writer'){
+            if($state-eq'error'){return '教学服务写入已启动，已忽略客户端延迟错误。'}
+            throw '教学服务数据正在写入，请等待本轮完成。'
+        }
+        if([string]$current.phase-eq'client'-and[string]$current.runId-ne$runId){throw '教学服务数据正在读取，请等待本轮完成。'}
+    }
+    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''}
+    $message=if($payload.message){[string]$payload.message}elseif($state-eq'running'){'正在读取当前Chrome中的IM与企微看板…'}else{'教学服务数据更新未启动'}
+    $startedAt=if($state-eq'running'){$now}elseif($current-and$current.startedAt){[string]$current.startedAt}else{$now}
+    $status=[ordered]@{state=$state;phase=if($state-eq'running'){'client'}else{'error'};runId=$runId;message=$message;detail=[string]$payload.detail;time=$now;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom);return '教学服务客户端状态已记录。'
+}
 
 function Repair-StaleStatus {
     $status = Read-StatusObject
