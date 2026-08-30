@@ -115,7 +115,7 @@ async function waitForTabReady(tabId,timeout=20000){
   });
 }
 
-async function collectCrmData(classes,excludedTeachers=["薛超"]){
+async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=async()=>{}){
         const deadline=Date.now()+4*60*1000;
         const api=async(url,options)=>{
           let lastError;
@@ -145,6 +145,18 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           throw new Error(`CRM_REQUEST_FAILED:${endpoint}:${reason}`);
         };
         const output=[];
+        let completedClasses=0,lastProgressAt=0;
+        const finishClass=async block=>{
+          completedClasses++;
+          if(completedClasses===classes.length||completedClasses%6===0||Date.now()-lastProgressAt>15000){
+            lastProgressAt=Date.now();
+            await onProgress("正在读取CRM班级与课次数据…",`已完成 ${completedClasses}/${classes.length} 个班级`);
+          }
+          return block;
+        };
+        const compactKeys=["class_id","class_name","live_course","user_id","course_id","course_number","unlock_time","nickname","child_name","is_open","course_open_time","is_finish","course_finish_time","watch_time","watch_process","day_of_week","class_time"];
+        const compactItem=item=>Object.fromEntries(compactKeys.filter(key=>item[key]!==undefined&&item[key]!==null).map(key=>[key,item[key]]));
+        const compactInfo=info=>Object.fromEntries(["teacherName","className","termName","classId","termId"].filter(key=>info[key]!==undefined&&info[key]!==null).map(key=>[key,info[key]]));
         const mapLimit=async(values,limit,worker)=>{
           const results=new Array(values.length);
           let cursor=0;
@@ -172,7 +184,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           const classId=Number(pair[0]),hintedTermId=Number(pair[1]);
           const infoResp=await api(`https://lbk-crm-teacher-web-api.codemao.cn/term/getTermInfo?classId=${classId}`);
           const info=infoResp.data||{},termId=Number(info.termId||hintedTermId);
-          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0]))return {classId,termId,info,excluded:true,reason:"teacher"};
+          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0]))return finishClass({classId,termId,info:compactInfo(info),excluded:true,reason:"teacher"});
           const all=await api(`https://api-codecamp-crm.codemao.cn/terms/${termId}/courses/all`);
           const catalog=Array.isArray(all)?all:(all.data||[]);
           const lessons=catalog.filter(c=>/^\d+-/.test(String(c.course_name||""))&&!/赛考精讲课/.test(String(c.course_name||""))).sort((a,b)=>Number(a.unlock_time||0)-Number(b.unlock_time||0)||Number(a.course_number||0)-Number(b.course_number||0)).slice(0,50);
@@ -197,7 +209,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           }
           const merged=new Map();
           for(const x of items){const key=`${x.user_id}|${x.course_id}`,old=merged.get(key);if(!old){merged.set(key,x);continue;}const preferred=(x.is_finish||x.is_open)?x:old;merged.set(key,{...old,...preferred,is_open:Boolean(old.is_open||x.is_open),is_finish:Boolean(old.is_finish||x.is_finish)});}
-          return {classId,termId,info,lessons,items:[...merged.values()]};
+          return finishClass({classId,termId,info:compactInfo(info),lessons,items:[...merged.values()].map(compactItem)});
         });
         output.push(...classBlocks);
         // Timely participation must come from the CRM live-board API.  The
@@ -272,8 +284,13 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
         }
         // Fetch independent room rosters with bounded concurrency, then merge
         // them in source order so duplicate-room reconciliation stays stable.
+        let completedLiveRooms=0;
         const liveResults=await mapLimit(liveMatches,3,async match=>{
           const [attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);
+          completedLiveRooms++;
+          if(completedLiveRooms===liveMatches.length||completedLiveRooms%10===0){
+            await onProgress("正在读取CRM直播上座名单…",`已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
+          }
           return {...match,attended,absent};
         });
         for(const {board,lessonNumber,targets,attended,absent} of liveResults){
@@ -308,7 +325,7 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
     // authenticated CRM requests without depending on page-frame lifetime or
     // page CORS, which previously caused intermittent `Failed to fetch`.
     const data=await Promise.race([
-      collectCrmData(classes,excludedTeachers),
+      collectCrmData(classes,excludedTeachers,(message,detail)=>postLocalStatus("running",message,detail,"crm",localBase)),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_TOTAL_TIMEOUT")),5*60*1000)),
     ]);
     return {ok:true,data};
