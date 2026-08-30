@@ -34,11 +34,13 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
     try{
       const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},10000);
       if(response.status===409)throw new Error("已有更新正在运行");
+      if(response.status===429){let detail="同一自动更新时段正在冷却";try{detail=(await response.json()).message||detail}catch{}throw new Error(`SCHEDULE_COOLDOWN:${detail}`);}
       if(response.ok)return await response.json();
       lastError=`本地控制台返回 ${response.status}`;
     }catch(error){
       const message=String(error?.message||error);
       if(message==="已有更新正在运行")throw error;
+      if(message.startsWith("SCHEDULE_COOLDOWN:"))throw error;
       lastError=message;
     }
     await new Promise(resolve=>setTimeout(resolve,5000));
@@ -125,10 +127,10 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
         const deadline=Date.now()+4*60*1000;
         const api=async(url,options)=>{
           let lastError;
-          for(let attempt=1;attempt<=2;attempt++){
+          for(let attempt=1;attempt<=3;attempt++){
             if(Date.now()>=deadline)throw new Error("CRM_TOTAL_TIMEOUT");
             const controller=new AbortController();
-            const timer=setTimeout(()=>controller.abort(),15000);
+            const timer=setTimeout(()=>controller.abort(),20000);
             try{
               const r=await fetch(url,{credentials:"include",...(options||{}),signal:controller.signal});
               const bytes=await r.arrayBuffer();
@@ -143,10 +145,12 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
             }catch(error){
               lastError=error;
               if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;
-              if(attempt<2)await new Promise(r=>setTimeout(r,700*attempt));
+              if(attempt<3)await new Promise(r=>setTimeout(r,900*attempt));
             }finally{clearTimeout(timer);}
           }
-          throw lastError||new Error("CRM_REQUEST_FAILED");
+          const endpoint=(()=>{try{const parsed=new URL(url);return `${parsed.hostname}${parsed.pathname}`}catch{return String(url)}})();
+          const reason=String(lastError?.message||lastError||"CRM_REQUEST_FAILED");
+          throw new Error(`CRM_REQUEST_FAILED:${endpoint}:${reason}`);
         };
         const output=[];
         const nowSec=Date.now()/1000;
@@ -281,10 +285,15 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
   }catch(error){
     const text=String(error?.message||error);
     const frameChanged=/Frame with ID \d+ was removed|No frame with id|frame was detached|Cannot find context with specified id|The tab was closed|tab was discarded/i.test(text);
-    if(frameChanged&&reconnectAttempt<3){
+    const networkFailed=/Failed to fetch|NetworkError|ERR_|CRM_REQUEST_FAILED/i.test(text);
+    if((frameChanged||networkFailed)&&reconnectAttempt<3){
       const attempt=reconnectAttempt+1;
-      await appendRunLog("CRM页面框架已刷新，自动重连",`第 ${attempt}/3 次：${text}`,localBase);
-      await postLocalStatus("running","CRM页面刚刚刷新，正在自动重新连接…",`自动恢复 ${attempt}/3；无需手动操作`,"crm",localBase);
+      const reason=frameChanged?"CRM页面框架已刷新":"CRM网络请求中断";
+      await appendRunLog(`${reason}，自动重连`,`第 ${attempt}/3 次：${text}`,localBase);
+      await postLocalStatus("running",`${reason}，正在自动恢复…`,`自动刷新CRM页面并重连 ${attempt}/3；无需手动操作`,"crm",localBase);
+      if(networkFailed){
+        try{await chrome.tabs.reload(tab.id,{bypassCache:true});await waitForTabReady(tab.id,30000);}catch{}
+      }
       await new Promise(resolve=>setTimeout(resolve,1200*attempt));
       return fetchInCrm(classes,excludedTeachers,attempt,localBase);
     }
@@ -560,13 +569,13 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
       const completed=await waitForLocalCompletion(0,10*60*1000,localBase);
       const successAt=String(completed.lastSuccessTime||completed.time||new Date().toLocaleString("zh-CN",{hour12:false}));
       const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
-      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功（已并入同一任务）",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功（已并入同一任务）",lastSuccessKey:slotKey,lastSuccessAt:successAt,lastFailureKey:"",lastFailureAt:0,failureCount:0}});
       return {ok:true,joined:true};
     }
     if(payload.alreadyCompleted){
       const successAt=String(payload.lastSuccessTime||new Date().toLocaleString("zh-CN",{hour12:false}));
       const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
-      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"同一时段已由另一连接器完成",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+      await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"同一时段已由另一连接器完成",lastSuccessKey:slotKey,lastSuccessAt:successAt,lastFailureKey:"",lastFailureAt:0,failureCount:0}});
       await appendRunLog("跳过重复任务",`${slotKey} 已由另一连接器完成`,localBase);
       return {ok:true,skipped:true};
     }
@@ -584,13 +593,15 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
     const completed=await waitForLocalCompletion(now,10*60*1000,localBase);
     const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
     const successAt=new Date().toLocaleString("zh-CN",{hour12:false});
-    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功",lastSuccessKey:slotKey,lastSuccessAt:successAt}});
+    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:successAt,lastResult:"更新成功",lastSuccessKey:slotKey,lastSuccessAt:successAt,lastFailureKey:"",lastFailureAt:0,failureCount:0}});
     await appendRunLog("更新成功",completed.message||slotKey,localBase);
     return {ok:true};
   }catch(error){
-    const message=String(error?.message||error);
+    const message=String(error?.message||error).replace(/^SCHEDULE_COOLDOWN:/,"");
     const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
-    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:new Date().toLocaleString("zh-CN",{hour12:false}),lastResult:message}});
+    const sameFailure=String(latest.lastFailureKey||"")===String(slotKey);
+    const failureCount=sameFailure?Number(latest.failureCount||0)+1:1;
+    await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:new Date().toLocaleString("zh-CN",{hour12:false}),lastResult:message,lastFailureKey:slotKey,lastFailureAt:Date.now(),failureCount}});
     await appendRunLog("更新失败",message,localBase);
     await postLocalStatus("error","自动更新失败",message,"crm",localBase);
     return {ok:false,error:message};
@@ -615,6 +626,13 @@ async function checkMissedSchedules(localBase=LOCAL_BASE){
   const successText=String(schedule.lastSuccessAt||"");
   const lastSuccessAt=Date.parse(successText)||Date.parse(successText.replace(" ","T"));
   if(Number.isFinite(lastSuccessAt)&&lastSuccessAt>=dueAt.getTime())return;
+  const legacyFailedAttempt=schedule.lastAttemptKey===key&&schedule.lastSuccessKey!==key&&String(schedule.lastResult||"")&&String(schedule.lastResult||"")!=="正在读取CRM数据"&&!String(schedule.lastResult||"").includes("更新成功");
+  if(legacyFailedAttempt&&Date.now()-Number(schedule.lastAttemptAt||0)<10*60*1000)return;
+  if(schedule.lastFailureKey===key){
+    const failureCount=Number(schedule.failureCount||0),lastFailureAt=Number(schedule.lastFailureAt||0);
+    if(failureCount>=3)return;
+    if(Date.now()-lastFailureAt<10*60*1000)return;
+  }
   if(schedule.lastAttemptKey===key&&Date.now()-Number(schedule.lastAttemptAt||0)<2*60*1000)return;
   await appendRunLog("检测到漏跑并补跑",`${today} ${time}`,localBase);
   return runScheduledUpdate(key,localBase);
@@ -650,7 +668,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"isolated-runtime-locks-18"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"isolated-runtime-locks-19"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome().then(sendResponse);return true;}

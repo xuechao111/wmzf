@@ -53,6 +53,7 @@ $serviceRunner = Join-Path $sourceRoot 'run-service-update.ps1'
 $selfUpdateRunner = Join-Path $sourceRoot 'self-update.ps1'
 $selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
 $bridgeErrorLog = Join-Path $root 'bridge-request-errors.log'
+$scheduleAttemptFile = Join-Path $root '.schedule-attempts.local.json'
 $staleStageSeconds = 360
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 
@@ -402,6 +403,38 @@ function Test-ScheduledSlotAlreadyCompleted($slotKey) {
     } catch { return $false }
 }
 
+function Get-ScheduleAttemptState {
+    if (-not (Test-Path -LiteralPath $scheduleAttemptFile)) { return @{} }
+    try {
+        $value = Get-Content -LiteralPath $scheduleAttemptFile -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+        if ($value -is [Collections.IDictionary]) { return $value }
+    } catch {}
+    return @{}
+}
+
+function Test-ScheduledSlotCoolingDown($slotKey) {
+    if ([string]::IsNullOrWhiteSpace([string]$slotKey) -or [string]$slotKey -like 'codemao-update-manual-*' -or [string]$slotKey -eq 'manual') { return $null }
+    $state = Get-ScheduleAttemptState
+    if (-not $state.ContainsKey([string]$slotKey)) { return $null }
+    $item = $state[[string]$slotKey]
+    try {
+        $lastAttempt = [DateTime]::ParseExact([string]$item.lastAttempt,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
+        $remaining = 10 - [int][Math]::Floor(((Get-Date) - $lastAttempt).TotalMinutes)
+        if ([int]$item.count -ge 3) { return '同一自动更新时段已尝试3次，已停止重复执行；请稍后手动更新。' }
+        if ($remaining -gt 0) { return "同一自动更新时段刚刚执行过，跨浏览器冷却中（约 $remaining 分钟）。" }
+    } catch {}
+    return $null
+}
+
+function Register-ScheduledSlotAttempt($slotKey) {
+    if ([string]::IsNullOrWhiteSpace([string]$slotKey) -or [string]$slotKey -like 'codemao-update-manual-*' -or [string]$slotKey -eq 'manual') { return }
+    $state = Get-ScheduleAttemptState
+    $previous = if ($state.ContainsKey([string]$slotKey)) { $state[[string]$slotKey] } else { $null }
+    $count = if ($previous) { [int]$previous.count + 1 } else { 1 }
+    $state[[string]$slotKey] = @{ count=$count; lastAttempt=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
+    [IO.File]::WriteAllText($scheduleAttemptFile,($state | ConvertTo-Json -Compress),$utf8NoBom)
+}
+
 function Send-ExtensionClasses($stream, $bodyText = '') {
     $slotKey = 'manual'
     try { if (-not [string]::IsNullOrWhiteSpace($bodyText)) { $slotKey = [string](($bodyText | ConvertFrom-Json).slotKey) } } catch {}
@@ -411,6 +444,12 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
         Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8'
         return
     }
+    $cooldown = Test-ScheduledSlotCoolingDown $slotKey
+    if (-not [string]::IsNullOrWhiteSpace([string]$cooldown)) {
+        $payload = [ordered]@{cooldown=$true;message=[string]$cooldown;slotKey=$slotKey} | ConvertTo-Json -Compress
+        Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8' '429 Too Many Requests'
+        return
+    }
     if (Test-RecentUpdateRunning) {
         $status = Read-StatusObject
         $payload = [ordered]@{alreadyRunning=$true;startedAt=[string]$status.startedAt;phase=[string]$status.phase;slotKey=$slotKey} | ConvertTo-Json -Compress
@@ -418,6 +457,7 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
         return
     }
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Register-ScheduledSlotAttempt $slotKey
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
     $script = Join-Path $sourceRoot 'prepare_extension_update.py'
     $response = Join-Path $root 'extension-classes.json'
