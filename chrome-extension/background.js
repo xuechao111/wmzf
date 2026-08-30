@@ -145,6 +145,19 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           throw new Error(`CRM_REQUEST_FAILED:${endpoint}:${reason}`);
         };
         const output=[];
+        const mapLimit=async(values,limit,worker)=>{
+          const results=new Array(values.length);
+          let cursor=0;
+          const runners=Array.from({length:Math.min(limit,values.length)},async()=>{
+            while(true){
+              const index=cursor++;
+              if(index>=values.length)return;
+              results[index]=await worker(values[index],index);
+            }
+          });
+          await Promise.all(runners);
+          return results;
+        };
         const nowSec=Date.now()/1000;
         const shanghai=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
         const weekday=(shanghai.getDay()+6)%7;
@@ -152,11 +165,14 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
         // Keep two prior weeks: before this week's first class the dashboard
         // falls back to last week and still needs the week-before-last baseline.
         const windowStart=monday.getTime()/1000-14*86400,windowEnd=monday.getTime()/1000+7*86400;
-        for(const pair of classes){
+        // CRM used to read all configured classes serially. With 50+ classes,
+        // network latency was multiplied by every class. Four workers keep the
+        // request rate conservative while reducing the wall-clock time.
+        const classBlocks=await mapLimit(classes,4,async pair=>{
           const classId=Number(pair[0]),hintedTermId=Number(pair[1]);
           const infoResp=await api(`https://lbk-crm-teacher-web-api.codemao.cn/term/getTermInfo?classId=${classId}`);
           const info=infoResp.data||{},termId=Number(info.termId||hintedTermId);
-          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0])){output.push({classId,termId,info,excluded:true,reason:"teacher"});continue;}
+          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0]))return {classId,termId,info,excluded:true,reason:"teacher"};
           const all=await api(`https://api-codecamp-crm.codemao.cn/terms/${termId}/courses/all`);
           const catalog=Array.isArray(all)?all:(all.data||[]);
           const lessons=catalog.filter(c=>/^\d+-/.test(String(c.course_name||""))&&!/赛考精讲课/.test(String(c.course_name||""))).sort((a,b)=>Number(a.unlock_time||0)-Number(b.unlock_time||0)||Number(a.course_number||0)-Number(b.course_number||0)).slice(0,50);
@@ -181,8 +197,9 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           }
           const merged=new Map();
           for(const x of items){const key=`${x.user_id}|${x.course_id}`,old=merged.get(key);if(!old){merged.set(key,x);continue;}const preferred=(x.is_finish||x.is_open)?x:old;merged.set(key,{...old,...preferred,is_open:Boolean(old.is_open||x.is_open),is_finish:Boolean(old.is_finish||x.is_finish)});}
-          output.push({classId,termId,info,lessons,items:[...merged.values()]});
-        }
+          return {classId,termId,info,lessons,items:[...merged.values()]};
+        });
+        output.push(...classBlocks);
         // Timely participation must come from the CRM live-board API.  The
         // course-detail `live_course` flag represents total participation and
         // does not match the board's "观看人数" metric.
@@ -190,10 +207,9 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
         const firstBoards=await livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page:1,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]});
         let boards=firstBoards.data?.items||[];
         const boardPages=Math.ceil(Number(firstBoards.data?.total||boards.length)/Number(firstBoards.data?.pageSize||100));
-        for(let page=2;page<=boardPages;page++){
-          const next=await livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]});
-          boards.push(...(next.data?.items||[]));
-        }
+        const remainingPages=Array.from({length:Math.max(0,boardPages-1)},(_,index)=>index+2);
+        const boardResponses=await mapLimit(remainingPages,4,page=>livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]}));
+        for(const next of boardResponses)boards.push(...(next.data?.items||[]));
         if(!boards.length)throw new Error("CRM_LIVE_BOARDS_EMPTY");
         const studentIds=async(board,isParticipated)=>{
           let pageIndex=1,ids=[],names={};
@@ -207,6 +223,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           return {ids,names};
         };
         let matchedLiveBoards=0;
+        const liveMatches=[];
         const collectClassIds=value=>{
           const found=[];
           const visit=(node,key="")=>{
@@ -251,7 +268,15 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           }
           if(!targets.length)continue;
           matchedLiveBoards+=targets.length;
-          const attended=await studentIds(board,true),absent=await studentIds(board,false);
+          liveMatches.push({board,lessonNumber,targets});
+        }
+        // Fetch independent room rosters with bounded concurrency, then merge
+        // them in source order so duplicate-room reconciliation stays stable.
+        const liveResults=await mapLimit(liveMatches,3,async match=>{
+          const [attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);
+          return {...match,attended,absent};
+        });
+        for(const {board,lessonNumber,targets,attended,absent} of liveResults){
           for(const block of targets){
             block.liveAttendance=block.liveAttendance||{};
             const old=block.liveAttendance[lessonNumber]||{expectedIds:[],attendedIds:[],absentIds:[],names:{},boardIds:[]};
