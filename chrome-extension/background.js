@@ -541,6 +541,27 @@ function utf8Base64(text){
   return btoa(binary);
 }
 
+async function uploadCrmData(data,localBase=LOCAL_BASE){
+  const encoded=utf8Base64(data),chunkSize=256*1024,total=Math.ceil(encoded.length/chunkSize);
+  const uploadId=`crm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const send=async(url,body,timeout=20000)=>{
+    let lastError;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        const response=await fetchWithTimeout(`${localBase}${url}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)},timeout);
+        if(response.ok)return response;
+        lastError=new Error(`本地服务返回 ${response.status}`);
+      }catch(error){lastError=error;}
+      if(attempt<3)await new Promise(resolve=>setTimeout(resolve,400*attempt));
+    }
+    throw new Error(`本地数据分片传输失败：${String(lastError?.message||lastError||"连接中断")}`);
+  };
+  for(let index=0;index<total;index++){
+    await send("/extension-data-chunk",{uploadId,index,total,data:encoded.slice(index*chunkSize,(index+1)*chunkSize)});
+  }
+  return send("/extension-data-commit",{uploadId,total},30000);
+}
+
 async function waitForLocalCompletion(startedAt,timeout=10*60*1000,localBase=LOCAL_BASE){
   localBase=normalizeLocalBase(localBase);
   const deadline=Date.now()+timeout;
@@ -610,11 +631,11 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
     const crm=await fetchInCrm(payload.classes||[],payload.excludedTeachers||["薛超"],0,localBase);
     if(!crm.ok)throw new Error(crm.error||"CRM读取失败");
     await postLocalStatus("running","CRM数据读取完成，正在启动本地计算…","","local",localBase);
-    const synced=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+    const synced=await uploadCrmData(crm.data,localBase);
     if(!synced.ok)throw new Error("本地更新脚本启动失败");
     if(!await waitForLocalRunner(now,20*1000,localBase)){
       await appendRunLog("本地脚本未进入计算阶段，自动重试启动",slotKey,localBase);
-      const retried=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+      const retried=await uploadCrmData(crm.data,localBase);
       if(!retried.ok)throw new Error("本地更新脚本自动重试启动失败");
     }
     const completed=await waitForLocalCompletion(now,10*60*1000,localBase);

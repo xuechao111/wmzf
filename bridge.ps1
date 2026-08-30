@@ -55,8 +55,10 @@ $selfUpdateRunner = Join-Path $sourceRoot 'self-update.ps1'
 $selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
 $bridgeErrorLog = Join-Path $root 'bridge-request-errors.log'
 $scheduleAttemptFile = Join-Path $root '.schedule-attempts.local.json'
+$extensionUploadDir = Join-Path $root 'run-data\extension-upload'
 $staleStageSeconds = 360
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
+if (-not (Test-Path -LiteralPath $extensionUploadDir)) { [void](New-Item -ItemType Directory -Path $extensionUploadDir -Force) }
 
 function Send-Bytes($stream, [byte[]]$body, $contentType, $status = '200 OK') {
     $head = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nX-Frame-Options: DENY`r`nReferrer-Policy: no-referrer`r`nConnection: close`r`n`r`n"
@@ -509,6 +511,38 @@ function Invoke-ExtensionUpdate($bodyText) {
     return 'CRM data received. Building and syncing dashboards.'
 }
 
+function Receive-ExtensionChunk($bodyText) {
+    $payload = $bodyText | ConvertFrom-Json
+    $uploadId = [string]$payload.uploadId
+    $index = [int]$payload.index
+    $total = [int]$payload.total
+    if ($uploadId -notmatch '^[a-zA-Z0-9-]{8,80}$' -or $total -lt 1 -or $total -gt 2000 -or $index -lt 0 -or $index -ge $total) { throw 'Invalid CRM upload chunk metadata.' }
+    $data = [string]$payload.data
+    if ([string]::IsNullOrEmpty($data) -or $data.Length -gt 400000) { throw 'Invalid CRM upload chunk size.' }
+    $file = Join-Path $extensionUploadDir ($uploadId + '.' + $index.ToString('D5') + '.part')
+    [IO.File]::WriteAllText($file,$data,[Text.Encoding]::ASCII)
+    return "CRM upload chunk $($index + 1)/$total received."
+}
+
+function Commit-ExtensionChunks($bodyText) {
+    $payload = $bodyText | ConvertFrom-Json
+    $uploadId = [string]$payload.uploadId
+    $total = [int]$payload.total
+    if ($uploadId -notmatch '^[a-zA-Z0-9-]{8,80}$' -or $total -lt 1 -or $total -gt 2000) { throw 'Invalid CRM upload commit metadata.' }
+    $builder = [Text.StringBuilder]::new()
+    try {
+        for ($index=0; $index -lt $total; $index++) {
+            $file = Join-Path $extensionUploadDir ($uploadId + '.' + $index.ToString('D5') + '.part')
+            if (-not (Test-Path -LiteralPath $file)) { throw "CRM upload chunk missing: $($index + 1)/$total" }
+            [void]$builder.Append([IO.File]::ReadAllText($file,[Text.Encoding]::ASCII))
+        }
+        $commitBody = @{ data=$builder.ToString() } | ConvertTo-Json -Compress
+        return Invoke-ExtensionUpdate $commitBody
+    } finally {
+        Get-ChildItem -LiteralPath $extensionUploadDir -Filter ($uploadId + '.*.part') -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-ExtensionStatus($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
     $allowed = @('idle','running','success','error')
@@ -666,6 +700,14 @@ while ($true) {
             '/extension-data' {
                 try { Send-Json $stream (Invoke-ExtensionUpdate $bodyText) }
                 catch { Send-Json $stream $_.Exception.Message '400 Bad Request' }
+            }
+            '/extension-data-chunk' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 上传数据分片。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Receive-ExtensionChunk $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
+            }
+            '/extension-data-commit' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交数据分片。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Commit-ExtensionChunks $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
             }
             '/extension-status' {
                 try { Send-Json $stream (Set-ExtensionStatus $bodyText) }
