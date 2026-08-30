@@ -135,19 +135,19 @@ def filter_dingtalk_excluded_rows(tables: dict[str, dict], excluded: set[str]) -
                 ]
 
 
-def validate_detail_teacher_preservation(expected: set[str], final_tables: dict[str, dict]) -> None:
+def validate_detail_teacher_preservation(expected: dict[str, set[str]], final_tables: dict[str, dict]) -> None:
     """Never silently remove generated teacher rows before DingTalk sync.
 
-    The expected set already applies the configuration panel's DingTalk
-    exclusions. Every remaining group teacher must be represented, including
-    explicit zero-result markers.
+    Expected sets contain only teachers with genuine generated detail rows.
+    The guard prevents the final configuration filter or table assembly from
+    silently dropping those real records.
     """
     actual = detail_teacher_sets(final_tables)
-    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
+    for name, expected_teachers in expected.items():
         final = final_tables.get(name)
         if not final:
             continue
-        missing = expected - actual.get(name, set())
+        missing = expected_teachers - actual.get(name, set())
         if missing:
             raise RuntimeError(f"{name} 写入前丢失老师：{'、'.join(sorted(missing))}；已停止覆盖钉钉旧数据。")
 
@@ -735,7 +735,11 @@ def run(from_raw: bool = False) -> None:
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
     dingtalk_excluded = dingtalk_excluded_teachers()
-    expected_detail_teachers = required_teachers(export["tables"]) - dingtalk_excluded
+    generated_detail_teachers = detail_teacher_sets(export["tables"])
+    expected_detail_teachers = {
+        name: teachers - dingtalk_excluded
+        for name, teachers in generated_detail_teachers.items()
+    }
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
     # Stop syncing retired views while preserving existing workbook sheets.
