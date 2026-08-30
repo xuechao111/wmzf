@@ -1,17 +1,11 @@
 $ErrorActionPreference = 'Stop'
-$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$instanceRoot = Join-Path $sourceRoot 'instances\test'
-$configFile = Join-Path $instanceRoot 'dashboard-config.json'
-$templateFile = Join-Path $sourceRoot 'dashboard-config.test.example.json'
 
-if (-not (Test-Path -LiteralPath $instanceRoot)) {
-    [void](New-Item -ItemType Directory -Path $instanceRoot -Force)
+# Compatibility entry point only. The replica owns its source code, runtime
+# data, configuration and Git history, so port 8766 can never use main source.
+$parent = Split-Path -Parent $PSScriptRoot
+$replicaRoot = Join-Path $parent 'hyperframes-dashboard-replica'
+$replicaLauncher = Join-Path $replicaRoot 'start-test-workbench.ps1'
+if (-not (Test-Path -LiteralPath $replicaLauncher)) {
+    throw "未找到独立副看板目录：$replicaRoot"
 }
-if (-not (Test-Path -LiteralPath $configFile)) {
-    Copy-Item -LiteralPath $templateFile -Destination $configFile
-}
-
-$env:HF_DASHBOARD_ROOT = $instanceRoot
-$env:HF_DASHBOARD_PORT = '8766'
-$env:HF_DASHBOARD_INSTANCE = 'test'
-& (Join-Path $sourceRoot 'bridge.ps1')
+& $replicaLauncher

@@ -20,6 +20,7 @@ $dashboardConfigFile = Join-Path $root 'dashboard-config.json'
 $dashboardUrl = 'https://alidocs.dingtalk.com/'
 $crmUrl = 'https://codecamp-crm.codemao.cn/layout/my-class'
 $rulesFile = 'C:\Users\user\.codex\skills\codemao-group-completion-dashboard\references\rules.md'
+$legacySyncFile = 'C:\Users\user\Desktop\Documents\编程猫管理skill\codemao-student-profile-extracted\codemao-course-data\sync.py'
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 function Test-PythonRuntime([string]$candidate) {
     if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) { return $false }
@@ -130,8 +131,9 @@ function Get-DashboardConfig {
     $issues = @()
     $workbook = ([string]$defaults.workbookUrl).Trim()
     if ([string]::IsNullOrWhiteSpace($workbook) -or $workbook -eq 'https://alidocs.dingtalk.com/' -or $workbook -match '请替换|请填写') { $issues += '教学数据钉钉文档链接' }
-    if ([string]::IsNullOrWhiteSpace(([string]$defaults.dingtalkConnectionUrl).Trim())) { $issues += '钉钉 MCP 连接地址' }
-    if (-not ($defaults.portableMode -eq $true -or $defaults.isTestInstance -eq $true) -and -not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
+    $hasLegacyConnection = Test-Path -LiteralPath $legacySyncFile
+    if ([string]::IsNullOrWhiteSpace(([string]$defaults.dingtalkConnectionUrl).Trim()) -and -not $hasLegacyConnection) { $issues += '钉钉 MCP 连接地址' }
+    if (-not ($defaults.portableMode -eq $true -or $defaults.isTestInstance -eq $true -or $hasLegacyConnection) -and -not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
     $defaults.teachingConfigurationIssues = $issues
     $defaults.teachingReady = ($issues.Count -eq 0)
     return [pscustomobject]$defaults
@@ -461,24 +463,18 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
     $script = Join-Path $sourceRoot 'prepare_extension_update.py'
     $response = Join-Path $root 'extension-classes.json'
-    $prepareStdout = Join-Path $root ('.prepare-' + [Guid]::NewGuid().ToString('N') + '.out.log')
-    $prepareStderr = Join-Path $root ('.prepare-' + [Guid]::NewGuid().ToString('N') + '.error.log')
-    try {
-        $prepareProcess = Start-Process -FilePath $python -ArgumentList @('-X','utf8',('"'+$script+'"'),('"'+$response+'"')) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $prepareStdout -RedirectStandardError $prepareStderr
-        $prepareOutput = @()
-        if (Test-Path -LiteralPath $prepareStdout) { $prepareOutput += @(Get-Content -LiteralPath $prepareStdout -Encoding UTF8 -ErrorAction SilentlyContinue) }
-        if (Test-Path -LiteralPath $prepareStderr) { $prepareOutput += @(Get-Content -LiteralPath $prepareStderr -Encoding UTF8 -ErrorAction SilentlyContinue) }
-    } finally {
-        Remove-Item -LiteralPath $prepareStdout,$prepareStderr -Force -ErrorAction SilentlyContinue
-    }
-    if ($prepareProcess.ExitCode -ne 0 -or -not (Test-Path $response)) {
+    # Run inside the already-hidden bridge process. Start-Process rebuilds the
+    # inherited environment and fails when Windows contains both Path and PATH.
+    $prepareOutput = @(& $python '-X' 'utf8' $script $response 2>&1)
+    $prepareExitCode = $LASTEXITCODE
+    if ($prepareExitCode -ne 0 -or -not (Test-Path $response)) {
         $config = Get-DashboardConfig
         $detail = if (@($config.classes).Count -eq 0 -and [string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl)) {
             '配置不完整：请填写钉钉连接地址，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
         } elseif ($prepareOutput.Count -gt 0) {
             '读取班级配置失败：' + [string]$prepareOutput[-1]
         } else {
-            '读取班级配置脚本异常退出（代码 ' + [string]$prepareProcess.ExitCode + '，Python：' + [IO.Path]::GetFileName($python) + '）。请先重新运行首次安装一键配置；若仍失败，再检查“班级id”子表。'
+            '读取班级配置脚本异常退出（代码 ' + [string]$prepareExitCode + '，Python：' + [IO.Path]::GetFileName($python) + '）。请先重新运行首次安装一键配置；若仍失败，再检查“班级id”子表。'
         }
         Write-StatusObject 'error' '更新准备失败，未读取到班级配置。' $detail $startedAt 'prepare'
         $payload = [ordered]@{message='Failed to prepare class IDs.';detail=$detail} | ConvertTo-Json -Compress
