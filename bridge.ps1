@@ -21,8 +21,29 @@ $dashboardUrl = 'https://alidocs.dingtalk.com/'
 $crmUrl = 'https://codecamp-crm.codemao.cn/layout/my-class'
 $rulesFile = 'C:\Users\user\.codex\skills\codemao-group-completion-dashboard\references\rules.md'
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-$python = if (Test-Path -LiteralPath $bundledPython) { $bundledPython } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
-if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python)) { throw '未找到可用的 Python 运行环境，控制台已停止启动以避免返回旧数据。' }
+function Test-PythonRuntime([string]$candidate) {
+    if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) { return $false }
+    try {
+        $probe = Start-Process -FilePath $candidate -ArgumentList '--version' -WindowStyle Hidden -Wait -PassThru
+        return $probe.ExitCode -eq 0
+    } catch { return $false }
+}
+function Resolve-PythonRuntime {
+    $candidates = [Collections.Generic.List[string]]::new()
+    [void]$candidates.Add((Join-Path $sourceRoot 'runtime\python\python.exe'))
+    [void]$candidates.Add($bundledPython)
+    foreach ($base in @((Join-Path $env:LOCALAPPDATA 'Programs\Python'),$env:ProgramFiles)) {
+        if ($base -and (Test-Path -LiteralPath $base)) {
+            Get-ChildItem -LiteralPath $base -Filter python.exe -File -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | ForEach-Object { [void]$candidates.Add($_.FullName) }
+        }
+    }
+    $command = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($command) { [void]$candidates.Add($command.Source) }
+    foreach ($candidate in $candidates) { if (Test-PythonRuntime $candidate) { return $candidate } }
+    return $null
+}
+$python = Resolve-PythonRuntime
+if ([string]::IsNullOrWhiteSpace($python)) { throw '未找到可执行的 Python 环境。请重新运行“首次安装一键配置.bat”；已排除 Windows 应用商店的无效 Python 占位程序。' }
 $statusFile = Join-Path $root 'status.json'
 $scholarshipStatusFile = Join-Path $root 'scholarship-status.json'
 $scholarshipRunner = Join-Path $sourceRoot 'run-scholarship-update.ps1'
@@ -417,7 +438,7 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
         } elseif ($prepareOutput.Count -gt 0) {
             '读取班级配置失败：' + [string]$prepareOutput[-1]
         } else {
-            '读取班级配置失败，请检查钉钉连接信息和“班级id”子表。'
+            '读取班级配置脚本异常退出（代码 ' + [string]$prepareProcess.ExitCode + '，Python：' + [IO.Path]::GetFileName($python) + '）。请先重新运行首次安装一键配置；若仍失败，再检查“班级id”子表。'
         }
         Write-StatusObject 'error' '更新准备失败，未读取到班级配置。' $detail $startedAt 'prepare'
         $payload = [ordered]@{message='Failed to prepare class IDs.';detail=$detail} | ConvertTo-Json -Compress

@@ -28,5 +28,6 @@ __pycache__/
 Thumbs.db
 
 # Locally packaged binaries
+runtime/
 *.exe
 *.zip

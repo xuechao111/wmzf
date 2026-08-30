@@ -21,7 +21,14 @@ STATUS = ROOT / "status.json"
 UPDATE_LOCK = ROOT / "update.lock"
 SKILL = SOURCE_ROOT
 LEGACY_SYNC = Path(r"C:\Users\user\Desktop\Documents\编程猫管理skill\codemao-student-profile-extracted\codemao-course-data\sync.py")
-NODE = Path(shutil.which("node") or r"C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe")
+NODE = next(
+    (path for path in (
+        SOURCE_ROOT / "runtime" / "node" / "node.exe",
+        Path(shutil.which("node")) if shutil.which("node") else None,
+        Path(r"C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"),
+    ) if path is not None and path.exists()),
+    SOURCE_ROOT / "runtime" / "node" / "node.exe",
+)
 WORKBOOK = ""
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 CRM_PROFILE = ROOT / "crm-browser-profile"

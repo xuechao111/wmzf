@@ -2,7 +2,8 @@ $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-$python = if (Test-Path -LiteralPath $bundledPython) { $bundledPython } else { (Get-Command python.exe -ErrorAction SilentlyContinue).Source }
+$portablePython = Join-Path $sourceRoot 'runtime\python\python.exe'
+$python = if (Test-Path -LiteralPath $portablePython) { $portablePython } elseif (Test-Path -LiteralPath $bundledPython) { $bundledPython } else { (Get-Command python.exe -ErrorAction SilentlyContinue).Source }
 $script = Join-Path $sourceRoot 'run_dashboard_update.py'
 $log = Join-Path $root 'update.log'
 if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python)) {
