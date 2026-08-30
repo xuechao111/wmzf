@@ -65,47 +65,91 @@ def configured_classes() -> list[list[int]]:
     return [list(pair) for pair in dict.fromkeys(map(tuple, result))]
 
 
-def comparison_teachers() -> set[str]:
-    """Teachers shown in the local comparison board but never written to DingTalk."""
+def detail_teacher_sets(tables: dict[str, dict]) -> dict[str, set[str]]:
+    """Snapshot generated teachers before the DingTalk table assembly stage."""
+    result: dict[str, set[str]] = {}
+    teacher_headers = {"老师", "老师姓名", "主讲老师"}
+    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
+        table = tables.get(name)
+        if not table:
+            continue
+        columns = [str(value or "").strip() for value in table.get("columns", [])]
+        teacher_index = next((index for index, value in enumerate(columns) if value in teacher_headers), None)
+        if teacher_index is None:
+            continue
+        result[name] = {
+            str(row[teacher_index] or "").strip()
+            for row in table.get("data", [])
+            if teacher_index < len(row) and str(row[teacher_index] or "").strip()
+        }
+    return result
+
+
+def required_teachers(tables: dict[str, dict]) -> set[str]:
+    """Use the verified overview as the non-excluded teacher roster."""
+    table = tables.get("组内概览") or {}
+    columns = [str(value or "").strip() for value in table.get("columns", [])]
+    teacher_index = next((index for index, value in enumerate(columns) if value in {"老师", "老师姓名", "主讲老师"}), None)
+    if teacher_index is None:
+        return set()
+    return {
+        str(row[teacher_index] or "").strip()
+        for row in table.get("data", [])
+        if teacher_index < len(row) and str(row[teacher_index] or "").strip()
+    }
+
+
+def dingtalk_excluded_teachers() -> set[str]:
+    """Teachers configured not to appear in DingTalk teaching sheets."""
+    config = dashboard_config()
     return {
         str(name).strip()
-        for name in dashboard_config().get("comparisonTeachers", [])
+        for key in ("excludedTeachers", "comparisonTeachers")
+        for name in config.get(key, [])
         if str(name).strip()
     }
 
 
-def filter_comparison_rows_for_dingtalk(tables: dict[str, dict]) -> dict[str, dict]:
-    """Remove configured comparison teachers from every teacher-scoped DingTalk table.
-
-    This intentionally runs after the local snapshot is built, so comparison
-    teachers remain available for cohort averages and Gap calculations in the
-    console while all DingTalk outputs remain group-only.
-    """
-    hidden = comparison_teachers()
-    if not hidden:
-        return tables
+def filter_dingtalk_excluded_rows(tables: dict[str, dict], excluded: set[str]) -> None:
+    """Apply the configuration-panel exclusions at the final sync boundary."""
+    if not excluded:
+        return
     teacher_headers = {"老师", "老师姓名", "主讲老师"}
     for table in tables.values():
         columns = [str(value or "").strip() for value in table.get("columns", [])]
-        teacher_index = next((index for index, name in enumerate(columns) if name in teacher_headers), None)
+        teacher_index = next((index for index, value in enumerate(columns) if value in teacher_headers), None)
         if teacher_index is None:
             continue
-        rows = table.get("data", [])
         table["data"] = [
-            row for row in rows
-            if teacher_index >= len(row) or str(row[teacher_index] or "").strip() not in hidden
+            row for row in table.get("data", [])
+            if teacher_index >= len(row) or str(row[teacher_index] or "").strip() not in excluded
         ]
-        if isinstance(table.get("anomalies"), list):
-            kept = [item for item in table["anomalies"] if str(item.get("teacher") or "").strip() not in hidden]
-            row_by_teacher = {
-                str(row[teacher_index] or "").strip(): index + 2
-                for index, row in enumerate(table["data"])
-                if teacher_index < len(row)
-            }
-            for item in kept:
-                item["row"] = row_by_teacher.get(str(item.get("teacher") or "").strip(), item.get("row"))
-            table["anomalies"] = kept
-    return tables
+        summary = table.get("summary")
+        if isinstance(summary, dict):
+            summary_columns = [str(value or "").strip() for value in summary.get("columns", [])]
+            summary_index = next((index for index, value in enumerate(summary_columns) if value in teacher_headers), None)
+            if summary_index is not None:
+                summary["data"] = [
+                    row for row in summary.get("data", [])
+                    if summary_index >= len(row) or str(row[summary_index] or "").strip() not in excluded
+                ]
+
+
+def validate_detail_teacher_preservation(expected: set[str], final_tables: dict[str, dict]) -> None:
+    """Never silently remove generated teacher rows before DingTalk sync.
+
+    The expected set already applies the configuration panel's DingTalk
+    exclusions. Every remaining group teacher must be represented, including
+    explicit zero-result markers.
+    """
+    actual = detail_teacher_sets(final_tables)
+    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
+        final = final_tables.get(name)
+        if not final:
+            continue
+        missing = expected - actual.get(name, set())
+        if missing:
+            raise RuntimeError(f"{name} 写入前丢失老师：{'、'.join(sorted(missing))}；已停止覆盖钉钉旧数据。")
 
 
 WORKBOOK = configured_workbook()
@@ -690,12 +734,16 @@ def run(from_raw: bool = False) -> None:
     subprocess.run([sys.executable, str(SOURCE_ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
+    dingtalk_excluded = dingtalk_excluded_teachers()
+    expected_detail_teachers = required_teachers(export["tables"]) - dingtalk_excluded
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
     # Stop syncing retired views while preserving existing workbook sheets.
     for disabled_name in DISABLED_SHEETS:
         tables.pop(disabled_name, None)
-    filter_comparison_rows_for_dingtalk(tables)
+    filter_dingtalk_excluded_rows(tables, dingtalk_excluded)
+    # Preserve every configured group teacher in all DingTalk detail sheets.
+    validate_detail_teacher_preservation(expected_detail_teachers, tables)
     batch_updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
     counts = {}
     total = len(tables)

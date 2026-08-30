@@ -267,15 +267,37 @@ def main():
     grouped_students = {}
     for level, teacher, _student, student_id, _slot, category, _period in abnormal_rows:
         grouped_students.setdefault((teacher, level, category), set()).add(student_id)
-    teacher_names = sorted({row[1] for row in abnormal_rows})
+    # Every active, non-excluded teacher must remain visible in the DingTalk
+    # detail sheets.  A zero-result marker distinguishes "no exception" from
+    # "teacher data was silently lost" without inventing a learner record.
+    active_teacher_names = sorted({clean_teacher(b.get("info", {}).get("teacherName")) for b in blocks if clean_teacher(b.get("info", {}).get("teacherName"))})
+    abnormal_teachers = {row[1] for row in abnormal_rows}
+    abnormal_rows.extend([
+        ["本周0条", teacher, "（本周无异常学员）", "", "", "本周无异常", period]
+        for teacher in active_teacher_names if teacher not in abnormal_teachers
+    ])
+    abnormal_rows.sort(key=lambda x: (priority.get(x[0], 9), x[1], ["周五晚", "周六午", "周六晚"].index(x[4]) if x[4] in ("周五晚", "周六午", "周六晚") else 9, x[2], x[3]))
+    teacher_names = active_teacher_names
     abnormal_summary_rows = []
     for teacher in teacher_names:
         counts = [len(grouped_students.get((teacher, level, category), set())) for level, category, _ in category_specs]
         abnormal_summary_rows.append([teacher, *counts, sum(counts), period])
     abnormal_summary_rows.sort(key=lambda row: (-row[-2], row[0]))
     abnormal_summary_columns = ["老师姓名", *[label for _level, _category, label in category_specs], "异常学员合计", "统计周期"]
-    untimely_rows = sorted(untimely.values(), key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2]))
-    replay_rows = sorted(replay_students.values(), key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2], x[6]))
+    untimely_rows = list(untimely.values())
+    untimely_teachers = {row[0] for row in untimely_rows}
+    untimely_rows.extend([
+        [teacher, "（本周无未准时参播学员）", "", "", "", "", "", period]
+        for teacher in active_teacher_names if teacher not in untimely_teachers
+    ])
+    untimely_rows.sort(key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2]))
+    replay_rows = list(replay_students.values())
+    replay_teachers = {row[0] for row in replay_rows}
+    replay_rows.extend([
+        [teacher, "（本周无回放学员）", "", "", "", "", "", "", "", period]
+        for teacher in active_teacher_names if teacher not in replay_teachers
+    ])
+    replay_rows.sort(key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2], x[6] if isinstance(x[6], int) else 0))
     live_rows.sort(key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[1]) if x[1] in ("周五晚", "周六午", "周六晚") else 9))
     term_rates = {}
     for (term, teacher), rec in overview.items():
