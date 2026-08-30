@@ -36,7 +36,7 @@ CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
 CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
 STYLE_STATE = DATA / "style-state.json"
-STYLE_LAYOUT_VERSION = 1
+STYLE_LAYOUT_VERSION = 2
 DISABLED_SHEETS = {"\u63a8\u8350\u8bdd\u672f"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
@@ -542,12 +542,12 @@ def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_la
             mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
         except Exception:
             pass
-        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{detail_header_row}:G{max(detail_header_row, detail_end)}"})
+        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{detail_header_row}:H{max(detail_header_row, detail_end)}"})
         if initialize_layout:
-            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:G1",
-                     "backgroundColors": matrix(1, 7, "#245B83"), "fontColors": matrix(1, 7, "#FFFFFF"),
-                     "fontWeights": matrix(1, 7, "bold"), "fontSizes": matrix(1, 7, 12),
-                     "horizontalAlignments": matrix(1, 7, "center"), "verticalAlignments": matrix(1, 7, "middle"), "wordWrap": "autoWrap"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:H1",
+                     "backgroundColors": matrix(1, 8, "#245B83"), "fontColors": matrix(1, 8, "#FFFFFF"),
+                     "fontWeights": matrix(1, 8, "bold"), "fontSizes": matrix(1, 8, 12),
+                     "horizontalAlignments": matrix(1, 8, "center"), "verticalAlignments": matrix(1, 8, "middle"), "wordWrap": "autoWrap"})
             mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}1:{summary_end_col}1",
                      "backgroundColors": matrix(1, 10, "#173F5F"), "fontColors": matrix(1, 10, "#FFFFFF"),
                      "fontWeights": matrix(1, 10, "bold"), "fontSizes": matrix(1, 10, 12),
@@ -564,7 +564,7 @@ def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_la
                      "fontColors": matrix(summary_rows, 10, "#233746"), "fontSizes": matrix(summary_rows, 10, 11),
                      "fontWeights": [["bold"] + ["normal"] * 7 + ["bold", "normal"] for _ in range(summary_rows)],
                      "horizontalAlignments": matrix(summary_rows, 10, "center"), "verticalAlignments": matrix(summary_rows, 10, "middle"), "wordWrap": "autoWrap"})
-            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"J3:Q{summary_end}", "numberFormat": "0"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"K3:R{summary_end}", "numberFormat": "0"})
         if detail_rows:
             fills, fonts, weights = [], [], []
             for row in table["data"]:
@@ -575,23 +575,23 @@ def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_la
                     fill, font, weight = "#FFF0E4", "#A85A16", "normal"
                 else:
                     fill, font, weight = "#FFF6DF", "#8A6A00", "normal"
-                fills.append([fill] * 7); fonts.append([font] * 7); weights.append([weight] * 7)
+                fills.append([fill] * 8); fonts.append([font] * 8); weights.append([weight] * 8)
             for offset in range(0, detail_rows, 900):
                 chunk_rows = min(900, detail_rows - offset)
                 first_row = detail_header_row + 1 + offset
                 last_row = first_row + chunk_rows - 1
-                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{first_row}:G{last_row}",
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{first_row}:H{last_row}",
                          "backgroundColors": fills[offset:offset + chunk_rows], "fontColors": fonts[offset:offset + chunk_rows],
-                         "fontWeights": weights[offset:offset + chunk_rows], "fontSizes": matrix(chunk_rows, 7, 10),
-                         "horizontalAlignments": matrix(chunk_rows, 7, "center"),
-                         "verticalAlignments": matrix(chunk_rows, 7, "middle"), "wordWrap": "autoWrap"})
+                         "fontWeights": weights[offset:offset + chunk_rows], "fontSizes": matrix(chunk_rows, 8, 10),
+                         "horizontalAlignments": matrix(chunk_rows, 8, "center"),
+                         "verticalAlignments": matrix(chunk_rows, 8, "middle"), "wordWrap": "autoWrap"})
         dimensions = [("ROWS", str(detail_header_row + 1), detail_rows, 30)]
         if initialize_layout:
             dimensions.extend([("ROWS", "1", 1, 58), ("ROWS", "2", 1, 54), ("ROWS", "3", summary_rows, 34),
-                              ("COLUMNS", "A", 1, 190), ("COLUMNS", "B", 1, 165), ("COLUMNS", "C", 1, 165),
-                              ("COLUMNS", "D", 1, 145), ("COLUMNS", "E", 1, 120), ("COLUMNS", "F", 1, 220),
-                              ("COLUMNS", "G", 1, 170), ("COLUMNS", "H", 1, 28),
-                              ("COLUMNS", "I", 1, 110), ("COLUMNS", "J", 7, 118), ("COLUMNS", "Q", 1, 105), ("COLUMNS", "R", 1, 170)])
+                              ("COLUMNS", "A", 1, 190), ("COLUMNS", "B", 1, 145), ("COLUMNS", "C", 1, 90),
+                              ("COLUMNS", "D", 1, 165), ("COLUMNS", "E", 1, 145), ("COLUMNS", "F", 1, 120),
+                              ("COLUMNS", "G", 1, 220), ("COLUMNS", "H", 1, 170), ("COLUMNS", "I", 1, 28),
+                              ("COLUMNS", "J", 1, 110), ("COLUMNS", "K", 7, 118), ("COLUMNS", "R", 1, 105), ("COLUMNS", "S", 1, 170)])
         for dimension, start, length, size in dimensions:
             if length:
                 mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
@@ -651,7 +651,7 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
     layout = {}
     if name == "异常学员" and table.get("summary"):
         summary = table["summary"]
-        summary_start = 8
+        summary_start = 9
         width = summary_start + len(summary["columns"])
         detail_rows = [table["columns"], *table.get("data", [])]
         summary_rows_data = [[summary.get("title") or "各老师异常分类汇总"], summary["columns"], *summary.get("data", [])]
@@ -666,7 +666,7 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
                 row[summary_start:summary_start + len(summary_row)] = summary_row
             rows.append(row)
         summary_rows = len(summary.get("data", []))
-        layout = {"summary_start_col": "I", "summary_end_col": "R", "summary_end_row": summary_rows + 2, "detail_header_row": 1}
+        layout = {"summary_start_col": "J", "summary_end_col": "S", "summary_end_row": summary_rows + 2, "detail_header_row": 1}
     else:
         rows = [table["columns"]] + table.get("data", [])
         width = len(table["columns"])
