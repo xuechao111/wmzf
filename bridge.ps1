@@ -63,8 +63,16 @@ if (-not (Test-Path -LiteralPath $extensionUploadDir)) { [void](New-Item -ItemTy
 function Send-Bytes($stream, [byte[]]$body, $contentType, $status = '200 OK') {
     $head = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nX-Frame-Options: DENY`r`nReferrer-Policy: no-referrer`r`nConnection: close`r`n`r`n"
     $header = [Text.Encoding]::ASCII.GetBytes($head)
-    $stream.Write($header,0,$header.Length)
-    $stream.Write($body,0,$body.Length)
+    try {
+        $stream.Write($header,0,$header.Length)
+        $stream.Write($body,0,$body.Length)
+    } catch [IO.IOException] {
+        # Browsers cancel superseded polling requests.  That is a transport
+        # event after the operation has completed, not an update failure.
+        return
+    } catch [ObjectDisposedException] {
+        return
+    }
 }
 
 function Start-SelfUpdate {
@@ -293,7 +301,15 @@ function Invoke-ServiceExtensionUpdate($bodyText) {
     $payload=$bodyText|ConvertFrom-Json
     $current = if (Test-Path $serviceStatusFile) { try { Get-Content $serviceStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null } } else { $null }
     $runId=[string]$payload.runId
-    $sameClientRun=$current-and[string]$current.state-eq'running'-and[string]$current.phase-eq'client'-and[string]$current.runId-eq$runId-and-not[string]::IsNullOrWhiteSpace($runId)
+    # Older already-open dashboard pages do not send runId.  A client-stage
+    # update is still the same hand-off; accepting it avoids a self-deadlock
+    # until that tab is refreshed.  Writer-stage and different non-empty runs
+    # remain protected below.
+    $sameClientRun=$current-and[string]$current.state-eq'running'-and[string]$current.phase-eq'client'-and(
+        ([string]$current.runId-eq$runId)-or
+        [string]::IsNullOrWhiteSpace([string]$current.runId)-or
+        [string]::IsNullOrWhiteSpace($runId)
+    )
     if ($current -and [string]$current.state -eq 'running' -and -not $sameClientRun) { throw '教学服务数据正在更新，请等待本轮完成。' }
     $bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
     if(!$parsed -or !$parsed.im -or !$parsed.wecom){throw '当前Chrome返回的教学服务数据不完整。'}
@@ -327,7 +343,7 @@ function Set-ServiceClientStatus($bodyText) {
             if($state-eq'error'){return '教学服务写入已启动，已忽略客户端延迟错误。'}
             throw '教学服务数据正在写入，请等待本轮完成。'
         }
-        if([string]$current.phase-eq'client'-and[string]$current.runId-ne$runId){throw '教学服务数据正在读取，请等待本轮完成。'}
+        if([string]$current.phase-eq'client'-and-not [string]::IsNullOrWhiteSpace([string]$current.runId)-and-not [string]::IsNullOrWhiteSpace($runId)-and[string]$current.runId-ne$runId){throw '教学服务数据正在读取，请等待本轮完成。'}
     }
     $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''}
     $message=if($payload.message){[string]$payload.message}elseif($state-eq'running'){'正在读取当前Chrome中的IM与企微看板…'}else{'教学服务数据更新未启动'}

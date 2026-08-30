@@ -32,7 +32,12 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
   let lastError="本地控制台服务未启动";
   while(Date.now()<deadline){
     try{
-      const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},10000);
+      // Reading the DingTalk class configuration can exceed ten seconds.
+      // Aborting at 10s left the local service finishing work for a socket the
+      // browser had already closed, which was incorrectly surfaced as an
+      // update failure.  Keep this below the outer two-minute deadline while
+      // allowing one preparation attempt to finish normally.
+      const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},60000);
       if(response.status===409)throw new Error("已有更新正在运行");
       if(response.status===429){let detail="同一自动更新时段正在冷却";try{detail=(await response.json()).message||detail}catch{}throw new Error(`SCHEDULE_COOLDOWN:${detail}`);}
       if(response.ok)return await response.json();
