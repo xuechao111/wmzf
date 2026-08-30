@@ -433,11 +433,20 @@ async function fetchServiceInCurrentChrome(){
   const dates=serviceWeekendDates();
   try{
     await waitForTabReady(tab.id);
-    const results=await chrome.scripting.executeScript({
+    const results=await Promise.race([chrome.scripting.executeScript({
       target:{tabId:tab.id},world:"MAIN",args:[dates],
       func:async dates=>{try{
         const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
-        const api=async(url,options={})=>{const response=await fetch(url,{credentials:"include",...options});if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`CRM_HTTP_${response.status}:${url}`);return response.json();};
+        const api=async(url,options={})=>{
+          let lastError;
+          for(let attempt=1;attempt<=2;attempt++){
+            const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
+            try{const response=await fetch(url,{credentials:"include",...options,signal:controller.signal});if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`CRM_HTTP_${response.status}:${url}`);return await response.json();}
+            catch(error){lastError=error;if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,700));}
+            finally{clearTimeout(timer);}
+          }
+          throw new Error(`CRM_SERVICE_REQUEST_FAILED:${url}:${String(lastError?.message||lastError)}`);
+        };
         const csrfResponse=await api("/api/v1/security/csrf_token/").catch(()=>({result:""}));
         const csrf=csrfResponse.result||"";
         const fetchDashboard=async(id,kind)=>{
@@ -452,7 +461,10 @@ async function fetchServiceInCurrentChrome(){
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
             const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");});
-            if(dimension!=="老师")return named;
+            // The verified dashboards expose stable, descriptive chart names.
+            // Use those candidates directly; scanning every chart definition
+            // multiplied Superset requests and could leave the UI waiting.
+            if(named.length||dimension!=="老师")return named;
             const structural=[];
             for(const chart of charts){
               const name=normalize(chart.slice_name||chart.chart_name||chart.name);if(name.includes("趋势")||name.includes("团队")||name.includes("小组")||name.includes("战区")||name.includes("用户"))continue;
@@ -505,16 +517,18 @@ async function fetchServiceInCurrentChrome(){
             return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:resultHeaders,rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns};
           };
           const fetchDimension=async dimension=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
-          return {teacher:await fetchDimension("老师"),group:await fetchDimension("小组")};
+          const [teacher,group]=await Promise.all([fetchDimension("老师"),fetchDimension("小组")]);
+          return {teacher,group};
         };
-        return JSON.stringify({dates,im:await fetchDashboard(382,"im"),wecom:await fetchDashboard(337,"wecom")});
+        const [im,wecom]=await Promise.all([fetchDashboard(382,"im"),fetchDashboard(337,"wecom")]);
+        return JSON.stringify({dates,im,wecom});
       }catch(error){return JSON.stringify({__serviceError:String(error?.stack||error?.message||error)});}
       }
-    });
+    }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),150000))]);
     const data=results[0]?.result;if(!data)return {ok:false,error:`当前 CRM 页面没有返回教学服务数据（诊断：tab=${tab.id}，results=${JSON.stringify(results)}）。`};
     try{const parsed=JSON.parse(data);if(parsed.__serviceError)return {ok:false,error:`CRM页面内读取失败：${parsed.__serviceError}`};}catch{}
     return {ok:true,data};
-  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":`教学服务数据读取失败：${text}`};}
+  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":text.includes("CRM_SERVICE_TOTAL_TIMEOUT")?"教学服务CRM读取超过2分30秒，已自动终止，请确认Superset页面正常后重试。":`教学服务数据读取失败：${text}`};}
 }
 
 function nextWeeklyTime(day,value){
