@@ -60,7 +60,10 @@ $selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
 $bridgeErrorLog = Join-Path $root 'bridge-request-errors.log'
 $scheduleAttemptFile = Join-Path $root '.schedule-attempts.local.json'
 $extensionUploadDir = Join-Path $root 'run-data\extension-upload'
-$staleStageSeconds = 360
+# The writer refreshes status.json before every DingTalk request and data
+# chunk.  Eight minutes without a heartbeat is therefore a genuine stalled
+# stage, while still allowing a slow 180-second request plus retries.
+$staleStageSeconds = 480
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 if (-not (Test-Path -LiteralPath $extensionUploadDir)) { [void](New-Item -ItemType Directory -Path $extensionUploadDir -Force) }
 
@@ -366,7 +369,7 @@ function Repair-StaleStatus {
         $lastChange = [DateTime]::ParseExact([string]$status.time,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
         $age = ((Get-Date) - $lastChange).TotalSeconds
         if ($age -gt $staleStageSeconds) {
-            Write-StatusObject 'error' '更新已超时并自动解除。' '某个阶段连续6分钟没有进展，已停止等待；旧数据保持不变，可以重新点击更新。' ([string]$status.startedAt) 'timeout'
+            Write-StatusObject 'error' '更新已超时并自动解除。' '某个阶段连续8分钟没有进展，已停止等待；旧数据保持不变，可以重新点击更新。' ([string]$status.startedAt) 'timeout'
         }
     } catch {}
 }

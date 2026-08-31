@@ -40,6 +40,7 @@ STYLE_LAYOUT_VERSION = 2
 DISABLED_SHEETS = {"\u63a8\u8350\u8bdd\u672f"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
+CURRENT_STATUS: dict[str, str] = {}
 
 
 def dashboard_config() -> dict:
@@ -158,6 +159,7 @@ WORKBOOK = configured_workbook()
 
 
 def set_status(state: str, message: str, detail: str = "") -> None:
+    global CURRENT_STATUS
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     previous = {}
     try:
@@ -170,7 +172,7 @@ def set_status(state: str, message: str, detail: str = "") -> None:
         last_success = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snapshot.stat().st_mtime))
     if state == "success":
         last_success = now
-    STATUS.write_text(json.dumps({
+    CURRENT_STATUS = {
         "state": state,
         "message": message,
         "detail": detail,
@@ -178,7 +180,19 @@ def set_status(state: str, message: str, detail: str = "") -> None:
         "startedAt": RUN_STARTED_AT or now,
         "phase": "local",
         "lastSuccessTime": last_success,
-    }, ensure_ascii=False), encoding="utf-8")
+    }
+    STATUS.write_text(json.dumps(CURRENT_STATUS, ensure_ascii=False), encoding="utf-8")
+
+
+def touch_status(detail: str = "") -> None:
+    """Refresh the watchdog heartbeat without losing the visible stage text."""
+    if not CURRENT_STATUS or CURRENT_STATUS.get("state") != "running":
+        return
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    CURRENT_STATUS["time"] = now
+    if detail:
+        CURRENT_STATUS["detail"] = detail
+    STATUS.write_text(json.dumps(CURRENT_STATUS, ensure_ascii=False), encoding="utf-8")
 
 
 def crm_pages() -> list[dict]:
@@ -238,6 +252,7 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
     body = json.dumps(payload).encode("utf-8")
     result = None
     for attempt in range(1, attempts + 1):
+        touch_status(f"正在调用钉钉接口 {name}（第 {attempt}/{attempts} 次）")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if MCP_TOKEN:
             headers["Authorization"] = "Bearer " + MCP_TOKEN
@@ -252,12 +267,14 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
                 raise
             delay = 1.5 * attempt
             print(f"钉钉接口 {name} 暂时异常（HTTP {exc.code}），{delay:.1f} 秒后重试 {attempt + 1}/{attempts}…", flush=True)
+            touch_status(f"钉钉接口 {name} 暂时波动，准备重试 {attempt + 1}/{attempts}")
             time.sleep(delay)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if attempt >= attempts:
                 raise
             delay = 1.5 * attempt
             print(f"钉钉接口 {name} 连接波动（{exc}），{delay:.1f} 秒后重试 {attempt + 1}/{attempts}…", flush=True)
+            touch_status(f"钉钉接口 {name} 连接波动，准备重试 {attempt + 1}/{attempts}")
             time.sleep(delay)
     if result is None:
         raise RuntimeError(f"钉钉接口 {name} 未返回结果")
@@ -677,6 +694,7 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
     for start in range(0, len(rows), chunk):
         values = rows[start:start + chunk]
         r1, r2 = start + 1, start + len(values)
+        touch_status(f"{name}：正在写入第 {r1}-{r2} 行，共 {len(rows)} 行")
         args = {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{r1}:{end_col}{r2}", "values": values, "format": "auto"}
         try:
             mcp_call("update_range", args, 180)

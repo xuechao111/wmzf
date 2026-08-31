@@ -1,6 +1,7 @@
 let LOCAL_BASE="http://127.0.0.1:8765";
 const CRM_RUNTIME_TIMEOUT_MS=6*60*1000;
-const LOCAL_RUNTIME_TIMEOUT_MS=11*60*1000;
+const LOCAL_RUNTIME_TIMEOUT_MS=45*60*1000;
+const LOCAL_HEARTBEAT_TIMEOUT_MS=8*60*1000;
 
 function normalizeLocalBase(value){
   return /^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(value||""))?String(value):"http://127.0.0.1:8765";
@@ -81,9 +82,11 @@ async function reconcileUpdateRuntime(localBase=LOCAL_BASE){
     if(state==="running"){
       const phase=String(status.phase||"crm");
       const timeout=phase==="local"?LOCAL_RUNTIME_TIMEOUT_MS:CRM_RUNTIME_TIMEOUT_MS;
-      if(Date.now()-runningSince<=timeout)return;
+      const statusTime=Date.parse(String(status.time||"").replace(" ","T"));
+      const heartbeatFresh=phase==="local"&&Number.isFinite(statusTime)&&Date.now()-statusTime<=LOCAL_HEARTBEAT_TIMEOUT_MS;
+      if(heartbeatFresh||Date.now()-runningSince<=timeout)return;
       const detail=phase==="local"
-        ?"本地计算或钉钉同步超过11分钟没有完成，已自动解除任务锁；旧数据保持不变。"
+        ?"本地计算或钉钉同步连续8分钟没有进度心跳，已自动解除任务锁；旧数据保持不变。"
         :"CRM连接超过6分钟没有返回，已自动解除任务锁；旧数据保持不变，可以重新更新。";
       const schedule=stored[scheduleKey]||{};
       const endedAt=new Date().toLocaleString("zh-CN",{hour12:false});
