@@ -1,4 +1,4 @@
-param([switch]$NoBrowser, [int]$Port = 8765)
+﻿param([switch]$NoBrowser, [int]$Port = 8765)
 
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))

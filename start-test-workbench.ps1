@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $instanceRoot = Join-Path $sourceRoot 'instances\test'
 $configFile = Join-Path $instanceRoot 'dashboard-config.json'

@@ -1,4 +1,4 @@
-param([switch]$CheckOnly, [switch]$RuntimeOnly)
+﻿param([switch]$CheckOnly, [switch]$RuntimeOnly)
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12

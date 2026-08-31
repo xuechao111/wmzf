@@ -7,7 +7,7 @@ Set fileSystem = CreateObject("Scripting.FileSystemObject")
 root = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 ensureScript = fileSystem.BuildPath(root, "ensure-dashboard-service.ps1")
 command = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File """ & ensureScript & """"
-visibleLauncher = fileSystem.BuildPath(root, "启动组长工作台.bat")
+visibleLauncher = fileSystem.BuildPath(root, "start-workbench.bat")
 
 ' Start or reuse the local service without showing a console window.
 exitCode = shell.Run(command, 0, True)

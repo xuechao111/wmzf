@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$InstallRoot,
     [Parameter(Mandatory=$true)][string]$RuntimeRoot,
     [int]$Port = 8765,
