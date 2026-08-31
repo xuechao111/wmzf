@@ -35,6 +35,8 @@ CRM_PROFILE = ROOT / "crm-browser-profile"
 CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
 CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
+STYLE_STATE = DATA / "style-state.json"
+STYLE_LAYOUT_VERSION = 2
 DISABLED_SHEETS = {"\u63a8\u8350\u8bdd\u672f"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
@@ -65,47 +67,91 @@ def configured_classes() -> list[list[int]]:
     return [list(pair) for pair in dict.fromkeys(map(tuple, result))]
 
 
-def comparison_teachers() -> set[str]:
-    """Teachers shown in the local comparison board but never written to DingTalk."""
+def detail_teacher_sets(tables: dict[str, dict]) -> dict[str, set[str]]:
+    """Snapshot generated teachers before the DingTalk table assembly stage."""
+    result: dict[str, set[str]] = {}
+    teacher_headers = {"老师", "老师姓名", "主讲老师"}
+    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
+        table = tables.get(name)
+        if not table:
+            continue
+        columns = [str(value or "").strip() for value in table.get("columns", [])]
+        teacher_index = next((index for index, value in enumerate(columns) if value in teacher_headers), None)
+        if teacher_index is None:
+            continue
+        result[name] = {
+            str(row[teacher_index] or "").strip()
+            for row in table.get("data", [])
+            if teacher_index < len(row) and str(row[teacher_index] or "").strip()
+        }
+    return result
+
+
+def required_teachers(tables: dict[str, dict]) -> set[str]:
+    """Use the verified overview as the non-excluded teacher roster."""
+    table = tables.get("组内概览") or {}
+    columns = [str(value or "").strip() for value in table.get("columns", [])]
+    teacher_index = next((index for index, value in enumerate(columns) if value in {"老师", "老师姓名", "主讲老师"}), None)
+    if teacher_index is None:
+        return set()
+    return {
+        str(row[teacher_index] or "").strip()
+        for row in table.get("data", [])
+        if teacher_index < len(row) and str(row[teacher_index] or "").strip()
+    }
+
+
+def dingtalk_excluded_teachers() -> set[str]:
+    """Teachers configured not to appear in DingTalk teaching sheets."""
+    config = dashboard_config()
     return {
         str(name).strip()
-        for name in dashboard_config().get("comparisonTeachers", [])
+        for key in ("excludedTeachers", "comparisonTeachers")
+        for name in config.get(key, [])
         if str(name).strip()
     }
 
 
-def filter_comparison_rows_for_dingtalk(tables: dict[str, dict]) -> dict[str, dict]:
-    """Remove configured comparison teachers from every teacher-scoped DingTalk table.
-
-    This intentionally runs after the local snapshot is built, so comparison
-    teachers remain available for cohort averages and Gap calculations in the
-    console while all DingTalk outputs remain group-only.
-    """
-    hidden = comparison_teachers()
-    if not hidden:
-        return tables
+def filter_dingtalk_excluded_rows(tables: dict[str, dict], excluded: set[str]) -> None:
+    """Apply the configuration-panel exclusions at the final sync boundary."""
+    if not excluded:
+        return
     teacher_headers = {"老师", "老师姓名", "主讲老师"}
     for table in tables.values():
         columns = [str(value or "").strip() for value in table.get("columns", [])]
-        teacher_index = next((index for index, name in enumerate(columns) if name in teacher_headers), None)
+        teacher_index = next((index for index, value in enumerate(columns) if value in teacher_headers), None)
         if teacher_index is None:
             continue
-        rows = table.get("data", [])
         table["data"] = [
-            row for row in rows
-            if teacher_index >= len(row) or str(row[teacher_index] or "").strip() not in hidden
+            row for row in table.get("data", [])
+            if teacher_index >= len(row) or str(row[teacher_index] or "").strip() not in excluded
         ]
-        if isinstance(table.get("anomalies"), list):
-            kept = [item for item in table["anomalies"] if str(item.get("teacher") or "").strip() not in hidden]
-            row_by_teacher = {
-                str(row[teacher_index] or "").strip(): index + 2
-                for index, row in enumerate(table["data"])
-                if teacher_index < len(row)
-            }
-            for item in kept:
-                item["row"] = row_by_teacher.get(str(item.get("teacher") or "").strip(), item.get("row"))
-            table["anomalies"] = kept
-    return tables
+        summary = table.get("summary")
+        if isinstance(summary, dict):
+            summary_columns = [str(value or "").strip() for value in summary.get("columns", [])]
+            summary_index = next((index for index, value in enumerate(summary_columns) if value in teacher_headers), None)
+            if summary_index is not None:
+                summary["data"] = [
+                    row for row in summary.get("data", [])
+                    if summary_index >= len(row) or str(row[summary_index] or "").strip() not in excluded
+                ]
+
+
+def validate_detail_teacher_preservation(expected: dict[str, set[str]], final_tables: dict[str, dict]) -> None:
+    """Never silently remove generated teacher rows before DingTalk sync.
+
+    Expected sets contain only teachers with genuine generated detail rows.
+    The guard prevents the final configuration filter or table assembly from
+    silently dropping those real records.
+    """
+    actual = detail_teacher_sets(final_tables)
+    for name, expected_teachers in expected.items():
+        final = final_tables.get(name)
+        if not final:
+            continue
+        missing = expected_teachers - actual.get(name, set())
+        if missing:
+            raise RuntimeError(f"{name} 写入前丢失老师：{'、'.join(sorted(missing))}；已停止覆盖钉钉旧数据。")
 
 
 WORKBOOK = configured_workbook()
@@ -339,17 +385,20 @@ def verify_current_week_only(sheet_id: str, table: dict) -> None:
     """Fail if a rolling sheet has stale periods or differs from this run's dynamic row count."""
     width = len(table["columns"])
     end_col = col_letter(width - 1)
-    # DingTalk limits one get_range call to 30,000 cells, so verify in chunks.
+    expected = table.get("data", [])
+    expected_end_row = len(expected) + 1
+    # Verify the populated region in chunks, then probe both the first cleared
+    # rows and the far tail. clear_range is atomic; downloading all 6,000 rows
+    # again only adds latency without increasing correctness.
     max_rows_per_read = max(1, 30000 // width)
     rows = []
-    for r1 in range(1, CURRENT_WEEK_CLEAR_LIMIT + 1, max_rows_per_read):
-        r2 = min(r1 + max_rows_per_read - 1, CURRENT_WEEK_CLEAR_LIMIT)
+    for r1 in range(1, expected_end_row + 1, max_rows_per_read):
+        r2 = min(r1 + max_rows_per_read - 1, expected_end_row)
         result = mcp_call("get_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{r1}:{end_col}{r2}"}, 180)
         if isinstance(result, dict) and result.get("success") is False:
             raise RuntimeError(f"{sheet_id} 校验读取失败：{result.get('errorMsg') or result}")
         rows.extend(find_rows(result) or [])
     populated = [row for row in rows[1:] if any(value not in (None, "") for value in row[:width])]
-    expected = table.get("data", [])
     expected_period = str(expected[0][-1]) if expected else ""
     periods = {str(row[width - 1]) for row in populated if len(row) >= width and row[width - 1] not in (None, "")}
     if len(populated) != len(expected) or periods != ({expected_period} if expected_period else set()):
@@ -357,9 +406,42 @@ def verify_current_week_only(sheet_id: str, table: dict) -> None:
             f"{sheet_id} 当周数据校验失败：应为 {len(expected)} 行、周期 {expected_period or '空'}；"
             f"实际 {len(populated)} 行、周期 {sorted(periods)}"
         )
+    tail_ranges = []
+    clear_start = expected_end_row + 1
+    if clear_start <= CURRENT_WEEK_CLEAR_LIMIT:
+        tail_ranges.append((clear_start, min(clear_start + 19, CURRENT_WEEK_CLEAR_LIMIT)))
+        far_start = max(clear_start, CURRENT_WEEK_CLEAR_LIMIT - 19)
+        if far_start > tail_ranges[-1][1]:
+            tail_ranges.append((far_start, CURRENT_WEEK_CLEAR_LIMIT))
+    for r1, r2 in tail_ranges:
+        result = mcp_call("get_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{r1}:{end_col}{r2}"}, 180)
+        if isinstance(result, dict) and result.get("success") is False:
+            raise RuntimeError(f"{sheet_id} 清空区校验读取失败：{result.get('errorMsg') or result}")
+        tail_rows = find_rows(result) or []
+        if any(any(value not in (None, "") for value in row[:width]) for row in tail_rows):
+            raise RuntimeError(f"{sheet_id} 清空区仍存在旧数据（{r1}:{r2}），已停止报告成功。")
 
 
-def style_overview_sheet(sheet_id: str, table: dict) -> None:
+def style_layout_initialized(name: str, sheet_id: str) -> bool:
+    try:
+        state = json.loads(STYLE_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return state.get(name) == {"sheetId": str(sheet_id), "version": STYLE_LAYOUT_VERSION}
+
+
+def mark_style_layout_initialized(name: str, sheet_id: str) -> None:
+    try:
+        state = json.loads(STYLE_STATE.read_text(encoding="utf-8")) if STYLE_STATE.exists() else {}
+    except Exception:
+        state = {}
+    state[name] = {"sheetId": str(sheet_id), "version": STYLE_LAYOUT_VERSION}
+    temporary = STYLE_STATE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(STYLE_STATE)
+
+
+def style_overview_sheet(sheet_id: str, table: dict, initialize_layout: bool = True) -> None:
     """Apply a compact, dashboard-like visual system to the overview sheet."""
     row_count = len(table.get("data", []))
     if not row_count:
@@ -367,48 +449,42 @@ def style_overview_sheet(sheet_id: str, table: dict) -> None:
     end_row = row_count + 1
     matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
     try:
-        mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2})
-        mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:P1",
-                 "backgroundColors": matrix(1, 16, "#173F5F"), "fontColors": matrix(1, 16, "#FFFFFF"),
-                 "fontWeights": matrix(1, 16, "bold"), "fontSizes": matrix(1, 16, 12),
-                 "horizontalAlignments": matrix(1, 16, "center"), "verticalAlignments": matrix(1, 16, "middle"), "wordWrap": "autoWrap"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:P{end_row}",
-                 "fontColors": matrix(row_count, 16, "#233746"), "fontSizes": matrix(row_count, 16, 11),
-                 "horizontalAlignments": matrix(row_count, 16, "center"), "verticalAlignments": matrix(row_count, 16, "middle"), "wordWrap": "autoWrap"})
+        if initialize_layout:
+            mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2})
+            mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:P1",
+                     "backgroundColors": matrix(1, 16, "#173F5F"), "fontColors": matrix(1, 16, "#FFFFFF"),
+                     "fontWeights": matrix(1, 16, "bold"), "fontSizes": matrix(1, 16, 12),
+                     "horizontalAlignments": matrix(1, 16, "center"), "verticalAlignments": matrix(1, 16, "middle"), "wordWrap": "autoWrap"})
         term_colors = ["#EAF3F8", "#EDF6E8", "#FFF1E6", "#F1EDFA"]
         terms = []
-        term_backgrounds = []
+        body_backgrounds, body_fonts, body_weights, body_alignments = [], [], [], []
         for row in table["data"]:
             term = str(row[0])
             if term not in terms:
                 terms.append(term)
             color = term_colors[terms.index(term) % len(term_colors)]
-            term_backgrounds.append([color, color, color])
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:C{end_row}",
-                 "backgroundColors": term_backgrounds, "fontWeights": matrix(row_count, 3, "bold")})
-        color_bands = [("D", "D", "#FFF6DF"), ("E", "G", "#E6F1F7"), ("H", "J", "#E9F4E7"),
-                       ("K", "K", "#FCE8E6"), ("L", "L", "#FFF0E4"),
-                       ("M", "M", "#F1EDFA"), ("N", "N", "#FFF6DF")]
-        for start_col, end_col, color in color_bands:
-            cols = ord(end_col) - ord(start_col) + 1
-            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{start_col}2:{end_col}{end_row}",
-                     "backgroundColors": matrix(row_count, cols, color)})
+            normal = str(row[14] or "") == "正常"
+            body_backgrounds.append([color, color, color, "#FFF6DF", "#E6F1F7", "#E6F1F7", "#E6F1F7",
+                                     "#E9F4E7", "#E9F4E7", "#E9F4E7", "#FCE8E6", "#FFF0E4",
+                                     "#F1EDFA", "#FFF6DF", "#E8F7F2" if normal else "#FADBD8", "#FFFFFF"])
+            body_fonts.append(["#233746"] * 14 + ["#116F5E" if normal else "#A3322E", "#233746"])
+            body_weights.append(["bold", "bold", "bold"] + ["normal"] * 11 + ["bold", "normal"])
+            body_alignments.append(["center"] * 14 + ["left", "center"])
+        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:P{end_row}",
+                 "backgroundColors": body_backgrounds, "fontColors": body_fonts, "fontWeights": body_weights,
+                 "fontSizes": matrix(row_count, 16, 11), "horizontalAlignments": body_alignments,
+                 "verticalAlignments": matrix(row_count, 16, "middle"), "wordWrap": "autoWrap"})
         mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"D2:J{end_row}", "numberFormat": "0.0%"})
         mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"C2:C{end_row}", "numberFormat": "#,##0"})
         mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"K2:N{end_row}", "numberFormat": "#,##0"})
-        warning_states = [str(row[14] or "") == "正常" for row in table["data"]]
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"O2:O{end_row}",
-                 "backgroundColors": [["#E8F7F2" if normal else "#FADBD8"] for normal in warning_states],
-                 "fontColors": [["#116F5E" if normal else "#A3322E"] for normal in warning_states],
-                 "fontWeights": matrix(row_count, 1, "bold"),
-                 "horizontalAlignments": matrix(row_count, 1, "left")})
-        dimensions = [("ROWS", "1", 1, 52), ("ROWS", "2", row_count, 38),
-                      ("COLUMNS", "A", 1, 88), ("COLUMNS", "B", 1, 96), ("COLUMNS", "C", 1, 72),
-                      ("COLUMNS", "D", 7, 98), ("COLUMNS", "K", 4, 92), ("COLUMNS", "O", 1, 320), ("COLUMNS", "P", 1, 180)]
-        for dimension, start, length, size in dimensions:
-            mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
-                     "startIndex": start, "length": length, "pixelSize": size})
+        if initialize_layout:
+            dimensions = [("ROWS", "1", 1, 52), ("ROWS", "2", row_count, 38),
+                          ("COLUMNS", "A", 1, 88), ("COLUMNS", "B", 1, 96), ("COLUMNS", "C", 1, 72),
+                          ("COLUMNS", "D", 7, 98), ("COLUMNS", "K", 4, 92), ("COLUMNS", "O", 1, 320), ("COLUMNS", "P", 1, 180)]
+            for dimension, start, length, size in dimensions:
+                mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
+                         "startIndex": start, "length": length, "pixelSize": size})
     except Exception as exc:
         print(f"组内概览样式更新警告：{exc}", flush=True)
 
@@ -446,7 +522,7 @@ def style_recommended_scripts_sheet(sheet_id: str, table: dict) -> None:
         print(f"推荐话术样式更新警告：{exc}", flush=True)
 
 
-def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict) -> None:
+def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_layout: bool = True) -> None:
     """Style learner details on the left and the teacher/category summary on the right."""
     summary_rows = len(table.get("summary", {}).get("data", []))
     detail_rows = len(table.get("data", []))
@@ -459,36 +535,36 @@ def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict) -> None:
     detail_end = detail_header_row + detail_rows
     matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
     try:
-        mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2, "tabColor": "#F4B183"})
-        mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
+        if initialize_layout:
+            mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2, "tabColor": "#F4B183"})
+            mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
         try:
             mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
         except Exception:
             pass
-        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{detail_header_row}:G{max(detail_header_row, detail_end)}"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:G1",
-                 "backgroundColors": matrix(1, 7, "#245B83"), "fontColors": matrix(1, 7, "#FFFFFF"),
-                 "fontWeights": matrix(1, 7, "bold"), "fontSizes": matrix(1, 7, 12),
-                 "horizontalAlignments": matrix(1, 7, "center"), "verticalAlignments": matrix(1, 7, "middle"), "wordWrap": "autoWrap"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}1:{summary_end_col}1",
-                 "backgroundColors": matrix(1, 10, "#173F5F"), "fontColors": matrix(1, 10, "#FFFFFF"),
-                 "fontWeights": matrix(1, 10, "bold"), "fontSizes": matrix(1, 10, 12),
-                 "horizontalAlignments": matrix(1, 10, "left"), "verticalAlignments": matrix(1, 10, "middle"), "wordWrap": "autoWrap"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}2:{summary_end_col}2",
-                 "backgroundColors": matrix(1, 10, "#245B83"), "fontColors": matrix(1, 10, "#FFFFFF"),
-                 "fontWeights": matrix(1, 10, "bold"), "fontSizes": matrix(1, 10, 10),
-                 "horizontalAlignments": matrix(1, 10, "center"), "verticalAlignments": matrix(1, 10, "middle"), "wordWrap": "autoWrap"})
+        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A{detail_header_row}:H{max(detail_header_row, detail_end)}"})
+        if initialize_layout:
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:H1",
+                     "backgroundColors": matrix(1, 8, "#245B83"), "fontColors": matrix(1, 8, "#FFFFFF"),
+                     "fontWeights": matrix(1, 8, "bold"), "fontSizes": matrix(1, 8, 12),
+                     "horizontalAlignments": matrix(1, 8, "center"), "verticalAlignments": matrix(1, 8, "middle"), "wordWrap": "autoWrap"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}1:{summary_end_col}1",
+                     "backgroundColors": matrix(1, 10, "#173F5F"), "fontColors": matrix(1, 10, "#FFFFFF"),
+                     "fontWeights": matrix(1, 10, "bold"), "fontSizes": matrix(1, 10, 12),
+                     "horizontalAlignments": matrix(1, 10, "left"), "verticalAlignments": matrix(1, 10, "middle"), "wordWrap": "autoWrap"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}2:{summary_end_col}2",
+                     "backgroundColors": matrix(1, 10, "#245B83"), "fontColors": matrix(1, 10, "#FFFFFF"),
+                     "fontWeights": matrix(1, 10, "bold"), "fontSizes": matrix(1, 10, 10),
+                     "horizontalAlignments": matrix(1, 10, "center"), "verticalAlignments": matrix(1, 10, "middle"), "wordWrap": "autoWrap"})
         if summary_rows:
+            summary_colors = ["#EAF3F8", "#FCE8E6", "#FCE8E6", "#FCE8E6", "#FCE8E6",
+                              "#FFF0E4", "#FFF0E4", "#FFF6DF", "#E6F1F7", "#F5F7F9"]
             mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{summary_start_col}3:{summary_end_col}{summary_end}",
+                     "backgroundColors": [summary_colors[:] for _ in range(summary_rows)],
                      "fontColors": matrix(summary_rows, 10, "#233746"), "fontSizes": matrix(summary_rows, 10, 11),
+                     "fontWeights": [["bold"] + ["normal"] * 7 + ["bold", "normal"] for _ in range(summary_rows)],
                      "horizontalAlignments": matrix(summary_rows, 10, "center"), "verticalAlignments": matrix(summary_rows, 10, "middle"), "wordWrap": "autoWrap"})
-            summary_bands = [("I", "#EAF3F8"), ("J", "#FCE8E6"), ("K", "#FCE8E6"), ("L", "#FCE8E6"), ("M", "#FCE8E6"),
-                             ("N", "#FFF0E4"), ("O", "#FFF0E4"), ("P", "#FFF6DF"), ("Q", "#E6F1F7"), ("R", "#F5F7F9")]
-            for column, color in summary_bands:
-                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{column}3:{column}{summary_end}",
-                         "backgroundColors": matrix(summary_rows, 1, color),
-                         "fontWeights": matrix(summary_rows, 1, "bold" if column in ("I", "Q") else "normal")})
-            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"J3:Q{summary_end}", "numberFormat": "0"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"K3:R{summary_end}", "numberFormat": "0"})
         if detail_rows:
             fills, fonts, weights = [], [], []
             for row in table["data"]:
@@ -499,22 +575,23 @@ def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict) -> None:
                     fill, font, weight = "#FFF0E4", "#A85A16", "normal"
                 else:
                     fill, font, weight = "#FFF6DF", "#8A6A00", "normal"
-                fills.append([fill] * 7); fonts.append([font] * 7); weights.append([weight] * 7)
+                fills.append([fill] * 8); fonts.append([font] * 8); weights.append([weight] * 8)
             for offset in range(0, detail_rows, 900):
                 chunk_rows = min(900, detail_rows - offset)
                 first_row = detail_header_row + 1 + offset
                 last_row = first_row + chunk_rows - 1
-                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{first_row}:G{last_row}",
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{first_row}:H{last_row}",
                          "backgroundColors": fills[offset:offset + chunk_rows], "fontColors": fonts[offset:offset + chunk_rows],
-                         "fontWeights": weights[offset:offset + chunk_rows], "fontSizes": matrix(chunk_rows, 7, 10),
-                         "horizontalAlignments": matrix(chunk_rows, 7, "center"),
-                         "verticalAlignments": matrix(chunk_rows, 7, "middle"), "wordWrap": "autoWrap"})
-        dimensions = [("ROWS", str(detail_header_row + 1), detail_rows, 30),
-                      ("ROWS", "1", 1, 58), ("ROWS", "2", 1, 54), ("ROWS", "3", summary_rows, 34),
-                      ("COLUMNS", "A", 1, 190), ("COLUMNS", "B", 1, 165), ("COLUMNS", "C", 1, 165),
-                      ("COLUMNS", "D", 1, 145), ("COLUMNS", "E", 1, 120), ("COLUMNS", "F", 1, 220),
-                      ("COLUMNS", "G", 1, 170), ("COLUMNS", "H", 1, 28),
-                      ("COLUMNS", "I", 1, 110), ("COLUMNS", "J", 7, 118), ("COLUMNS", "Q", 1, 105), ("COLUMNS", "R", 1, 170)]
+                         "fontWeights": weights[offset:offset + chunk_rows], "fontSizes": matrix(chunk_rows, 8, 10),
+                         "horizontalAlignments": matrix(chunk_rows, 8, "center"),
+                         "verticalAlignments": matrix(chunk_rows, 8, "middle"), "wordWrap": "autoWrap"})
+        dimensions = [("ROWS", str(detail_header_row + 1), detail_rows, 30)]
+        if initialize_layout:
+            dimensions.extend([("ROWS", "1", 1, 58), ("ROWS", "2", 1, 54), ("ROWS", "3", summary_rows, 34),
+                              ("COLUMNS", "A", 1, 190), ("COLUMNS", "B", 1, 145), ("COLUMNS", "C", 1, 90),
+                              ("COLUMNS", "D", 1, 165), ("COLUMNS", "E", 1, 145), ("COLUMNS", "F", 1, 120),
+                              ("COLUMNS", "G", 1, 220), ("COLUMNS", "H", 1, 170), ("COLUMNS", "I", 1, 28),
+                              ("COLUMNS", "J", 1, 110), ("COLUMNS", "K", 7, 118), ("COLUMNS", "R", 1, 105), ("COLUMNS", "S", 1, 170)])
         for dimension, start, length, size in dimensions:
             if length:
                 mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
@@ -570,10 +647,11 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
             raise RuntimeError(f"创建子表失败：{name} {created}")
         sheet_id = created.get("sheetId") or name
         SHEET_IDS[name] = str(sheet_id)
+    initialize_layout = not style_layout_initialized(name, str(sheet_id))
     layout = {}
     if name == "异常学员" and table.get("summary"):
         summary = table["summary"]
-        summary_start = 8
+        summary_start = 9
         width = summary_start + len(summary["columns"])
         detail_rows = [table["columns"], *table.get("data", [])]
         summary_rows_data = [[summary.get("title") or "各老师异常分类汇总"], summary["columns"], *summary.get("data", [])]
@@ -588,12 +666,14 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
                 row[summary_start:summary_start + len(summary_row)] = summary_row
             rows.append(row)
         summary_rows = len(summary.get("data", []))
-        layout = {"summary_start_col": "I", "summary_end_col": "R", "summary_end_row": summary_rows + 2, "detail_header_row": 1}
+        layout = {"summary_start_col": "J", "summary_end_col": "S", "summary_end_row": summary_rows + 2, "detail_header_row": 1}
     else:
         rows = [table["columns"]] + table.get("data", [])
         width = len(table["columns"])
     end_col = col_letter(width - 1)
-    chunk = 80 if width > 30 else 180
+    # Keep each request below DingTalk's 30,000-cell limit while avoiding the
+    # many tiny 180-row writes that dominated large detail-sheet refreshes.
+    chunk = max(1, min(1000, 28000 // max(1, width)))
     for start in range(0, len(rows), chunk):
         values = rows[start:start + chunk]
         r1, r2 = start + 1, start + len(values)
@@ -622,16 +702,18 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
             mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{stamp_col}1",
                      "values": [[stamp_text]], "backgroundColors": [["#173F5F"]], "fontColors": [["#FFFFFF"]],
                      "fontWeights": [["bold"]], "horizontalAlignments": [["center"]], "verticalAlignments": [["middle"]]})
-            mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "COLUMNS",
-                     "startIndex": stamp_col, "length": 1, "pixelSize": 230})
+            if initialize_layout:
+                mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "COLUMNS",
+                         "startIndex": stamp_col, "length": 1, "pixelSize": 230})
         except Exception as exc:
             print(f"{name} 更新时间单元格写入警告：{exc}", flush=True)
     if name == "组内概览":
-        style_overview_sheet(sheet_id, table)
+        style_overview_sheet(sheet_id, table, initialize_layout)
     elif name == "异常学员":
-        style_abnormal_sheet(sheet_id, table, layout)
+        style_abnormal_sheet(sheet_id, table, layout, initialize_layout)
     elif name == "推荐话术":
         style_recommended_scripts_sheet(sheet_id, table)
+    mark_style_layout_initialized(name, str(sheet_id))
     return len(table.get("data", []))
 
 
@@ -690,21 +772,34 @@ def run(from_raw: bool = False) -> None:
     subprocess.run([sys.executable, str(SOURCE_ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
+    dingtalk_excluded = dingtalk_excluded_teachers()
+    generated_detail_teachers = detail_teacher_sets(export["tables"])
+    expected_detail_teachers = {
+        name: teachers - dingtalk_excluded
+        for name, teachers in generated_detail_teachers.items()
+    }
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
     # Stop syncing retired views while preserving existing workbook sheets.
     for disabled_name in DISABLED_SHEETS:
         tables.pop(disabled_name, None)
-    filter_comparison_rows_for_dingtalk(tables)
+    filter_dingtalk_excluded_rows(tables, dingtalk_excluded)
+    # Preserve every configured group teacher in all DingTalk detail sheets.
+    validate_detail_teacher_preservation(expected_detail_teachers, tables)
     batch_updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
     counts = {}
+    timings = {}
     total = len(tables)
     for index, (name, table) in enumerate(tables.items(), 1):
         elapsed = int(time.monotonic() - started)
         set_status("running", f"正在写入钉钉（{index}/{total}）：{name}…", f"本轮已运行 {elapsed // 60} 分 {elapsed % 60} 秒")
+        sheet_started = time.monotonic()
         counts[name] = write_sheet(name, table, batch_updated_at)
+        timings[name] = round(time.monotonic() - sheet_started, 1)
+        print(f"{name} 写入完成：{counts[name]} 行，耗时 {timings[name]:.1f} 秒", flush=True)
     detail = "；".join(f"{name} {count} 行" for name, count in counts.items())
     elapsed = int(time.monotonic() - started)
+    print("各子表耗时：" + "；".join(f"{name} {seconds:.1f}秒" for name, seconds in timings.items()), flush=True)
     set_status("success", f"组内教学数据更新完成（{elapsed // 60} 分 {elapsed % 60} 秒）。", detail)
 
 

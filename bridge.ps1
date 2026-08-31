@@ -55,14 +55,24 @@ $selfUpdateRunner = Join-Path $sourceRoot 'self-update.ps1'
 $selfUpdateStatusFile = Join-Path $root 'self-update-status.json'
 $bridgeErrorLog = Join-Path $root 'bridge-request-errors.log'
 $scheduleAttemptFile = Join-Path $root '.schedule-attempts.local.json'
+$extensionUploadDir = Join-Path $root 'run-data\extension-upload'
 $staleStageSeconds = 360
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
+if (-not (Test-Path -LiteralPath $extensionUploadDir)) { [void](New-Item -ItemType Directory -Path $extensionUploadDir -Force) }
 
 function Send-Bytes($stream, [byte[]]$body, $contentType, $status = '200 OK') {
     $head = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nX-Frame-Options: DENY`r`nReferrer-Policy: no-referrer`r`nConnection: close`r`n`r`n"
     $header = [Text.Encoding]::ASCII.GetBytes($head)
-    $stream.Write($header,0,$header.Length)
-    $stream.Write($body,0,$body.Length)
+    try {
+        $stream.Write($header,0,$header.Length)
+        $stream.Write($body,0,$body.Length)
+    } catch [IO.IOException] {
+        # Browsers cancel superseded polling requests.  That is a transport
+        # event after the operation has completed, not an update failure.
+        return
+    } catch [ObjectDisposedException] {
+        return
+    }
 }
 
 function Start-SelfUpdate {
@@ -288,12 +298,23 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
 
 function Invoke-ServiceExtensionUpdate($bodyText) {
     Repair-ServiceStatus
+    $payload=$bodyText|ConvertFrom-Json
     $current = if (Test-Path $serviceStatusFile) { try { Get-Content $serviceStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null } } else { $null }
-    if ($current -and [string]$current.state -eq 'running') { throw '教学服务数据正在更新，请等待本轮完成。' }
-    $payload=$bodyText|ConvertFrom-Json;$bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
+    $runId=[string]$payload.runId
+    # Older already-open dashboard pages do not send runId.  A client-stage
+    # update is still the same hand-off; accepting it avoids a self-deadlock
+    # until that tab is refreshed.  Writer-stage and different non-empty runs
+    # remain protected below.
+    $sameClientRun=$current-and[string]$current.state-eq'running'-and[string]$current.phase-eq'client'-and(
+        ([string]$current.runId-eq$runId)-or
+        [string]::IsNullOrWhiteSpace([string]$current.runId)-or
+        [string]::IsNullOrWhiteSpace($runId)
+    )
+    if ($current -and [string]$current.state -eq 'running' -and -not $sameClientRun) { throw '教学服务数据正在更新，请等待本轮完成。' }
+    $bytes=[Convert]::FromBase64String([string]$payload.data);$jsonText=[Text.Encoding]::UTF8.GetString($bytes);$parsed=$jsonText|ConvertFrom-Json
     if(!$parsed -or !$parsed.im -or !$parsed.wecom){throw '当前Chrome返回的教学服务数据不完整。'}
     $sourceFile=Join-Path $root 'service-source.json';[IO.File]::WriteAllBytes($sourceFile,$bytes);$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom)
+    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='running';phase='writer';runId=$runId;message='正在更新教学服务数据…';detail='只更新“教学服务数据”子表';time=$startedAt;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom)
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$serviceRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return '教学服务数据已接收，正在更新子表。'
 }
@@ -313,7 +334,23 @@ function Repair-ServiceStatus {
     } catch {}
 }
 
-function Set-ServiceClientStatus($bodyText) {$payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss';$current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null};$lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''};$status=[ordered]@{state='error';message='教学服务数据更新未启动';detail=[string]$payload.detail;time=$now;startedAt=$now;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom);return '教学服务错误已记录。'}
+function Set-ServiceClientStatus($bodyText) {
+    $payload=$bodyText|ConvertFrom-Json;$now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $current=if(Test-Path $serviceStatusFile){try{Get-Content $serviceStatusFile -Raw -Encoding UTF8|ConvertFrom-Json}catch{$null}}else{$null}
+    $runId=[string]$payload.runId;$state=if([string]$payload.state-eq'running'){'running'}else{'error'}
+    if($current-and[string]$current.state-eq'running'){
+        if([string]$current.phase-eq'writer'){
+            if($state-eq'error'){return '教学服务写入已启动，已忽略客户端延迟错误。'}
+            throw '教学服务数据正在写入，请等待本轮完成。'
+        }
+        if([string]$current.phase-eq'client'-and-not [string]::IsNullOrWhiteSpace([string]$current.runId)-and-not [string]::IsNullOrWhiteSpace($runId)-and[string]$current.runId-ne$runId){throw '教学服务数据正在读取，请等待本轮完成。'}
+    }
+    $lastSuccessTime=if($current-and$current.lastSuccessTime){[string]$current.lastSuccessTime}elseif($current-and[string]$current.state-eq'success'){[string]$current.time}else{''}
+    $message=if($payload.message){[string]$payload.message}elseif($state-eq'running'){'正在读取当前Chrome中的IM与企微看板…'}else{'教学服务数据更新未启动'}
+    $startedAt=if($state-eq'running'){$now}elseif($current-and$current.startedAt){[string]$current.startedAt}else{$now}
+    $status=[ordered]@{state=$state;phase=if($state-eq'running'){'client'}else{'error'};runId=$runId;message=$message;detail=[string]$payload.detail;time=$now;startedAt=$startedAt;lastSuccessTime=$lastSuccessTime}|ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($serviceStatusFile,$status,$utf8NoBom);return '教学服务客户端状态已记录。'
+}
 
 function Repair-StaleStatus {
     $status = Read-StatusObject
@@ -509,6 +546,38 @@ function Invoke-ExtensionUpdate($bodyText) {
     return 'CRM data received. Building and syncing dashboards.'
 }
 
+function Receive-ExtensionChunk($bodyText) {
+    $payload = $bodyText | ConvertFrom-Json
+    $uploadId = [string]$payload.uploadId
+    $index = [int]$payload.index
+    $total = [int]$payload.total
+    if ($uploadId -notmatch '^[a-zA-Z0-9-]{8,80}$' -or $total -lt 1 -or $total -gt 2000 -or $index -lt 0 -or $index -ge $total) { throw 'Invalid CRM upload chunk metadata.' }
+    $data = [string]$payload.data
+    if ([string]::IsNullOrEmpty($data) -or $data.Length -gt 400000) { throw 'Invalid CRM upload chunk size.' }
+    $file = Join-Path $extensionUploadDir ($uploadId + '.' + $index.ToString('D5') + '.part')
+    [IO.File]::WriteAllText($file,$data,[Text.Encoding]::ASCII)
+    return "CRM upload chunk $($index + 1)/$total received."
+}
+
+function Commit-ExtensionChunks($bodyText) {
+    $payload = $bodyText | ConvertFrom-Json
+    $uploadId = [string]$payload.uploadId
+    $total = [int]$payload.total
+    if ($uploadId -notmatch '^[a-zA-Z0-9-]{8,80}$' -or $total -lt 1 -or $total -gt 2000) { throw 'Invalid CRM upload commit metadata.' }
+    $builder = [Text.StringBuilder]::new()
+    try {
+        for ($index=0; $index -lt $total; $index++) {
+            $file = Join-Path $extensionUploadDir ($uploadId + '.' + $index.ToString('D5') + '.part')
+            if (-not (Test-Path -LiteralPath $file)) { throw "CRM upload chunk missing: $($index + 1)/$total" }
+            [void]$builder.Append([IO.File]::ReadAllText($file,[Text.Encoding]::ASCII))
+        }
+        $commitBody = @{ data=$builder.ToString() } | ConvertTo-Json -Compress
+        return Invoke-ExtensionUpdate $commitBody
+    } finally {
+        Get-ChildItem -LiteralPath $extensionUploadDir -Filter ($uploadId + '.*.part') -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-ExtensionStatus($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
     $allowed = @('idle','running','success','error')
@@ -666,6 +735,14 @@ while ($true) {
             '/extension-data' {
                 try { Send-Json $stream (Invoke-ExtensionUpdate $bodyText) }
                 catch { Send-Json $stream $_.Exception.Message '400 Bad Request' }
+            }
+            '/extension-data-chunk' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 上传数据分片。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Receive-ExtensionChunk $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
+            }
+            '/extension-data-commit' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交数据分片。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Commit-ExtensionChunks $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
             }
             '/extension-status' {
                 try { Send-Json $stream (Set-ExtensionStatus $bodyText) }

@@ -32,7 +32,12 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
   let lastError="本地控制台服务未启动";
   while(Date.now()<deadline){
     try{
-      const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},10000);
+      // Reading the DingTalk class configuration can exceed ten seconds.
+      // Aborting at 10s left the local service finishing work for a socket the
+      // browser had already closed, which was incorrectly surfaced as an
+      // update failure.  Keep this below the outer two-minute deadline while
+      // allowing one preparation attempt to finish normally.
+      const response=await fetchWithTimeout(`${localBase}/prepare-extension`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},60000);
       if(response.status===409)throw new Error("已有更新正在运行");
       if(response.status===429){let detail="同一自动更新时段正在冷却";try{detail=(await response.json()).message||detail}catch{}throw new Error(`SCHEDULE_COOLDOWN:${detail}`);}
       if(response.ok)return await response.json();
@@ -115,7 +120,7 @@ async function waitForTabReady(tabId,timeout=20000){
   });
 }
 
-async function collectCrmData(classes,excludedTeachers=["薛超"]){
+async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=async()=>{}){
         const deadline=Date.now()+4*60*1000;
         const api=async(url,options)=>{
           let lastError;
@@ -145,6 +150,31 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           throw new Error(`CRM_REQUEST_FAILED:${endpoint}:${reason}`);
         };
         const output=[];
+        let completedClasses=0,lastProgressAt=0;
+        const finishClass=async block=>{
+          completedClasses++;
+          if(completedClasses===classes.length||completedClasses%6===0||Date.now()-lastProgressAt>15000){
+            lastProgressAt=Date.now();
+            await onProgress("正在读取CRM班级与课次数据…",`已完成 ${completedClasses}/${classes.length} 个班级`);
+          }
+          return block;
+        };
+        const compactKeys=["class_id","class_name","live_course","user_id","course_id","course_number","unlock_time","nickname","child_name","is_open","course_open_time","is_finish","course_finish_time","watch_time","watch_process","day_of_week","class_time"];
+        const compactItem=item=>Object.fromEntries(compactKeys.filter(key=>item[key]!==undefined&&item[key]!==null).map(key=>[key,item[key]]));
+        const compactInfo=info=>Object.fromEntries(["teacherName","className","termName","classId","termId"].filter(key=>info[key]!==undefined&&info[key]!==null).map(key=>[key,info[key]]));
+        const mapLimit=async(values,limit,worker)=>{
+          const results=new Array(values.length);
+          let cursor=0;
+          const runners=Array.from({length:Math.min(limit,values.length)},async()=>{
+            while(true){
+              const index=cursor++;
+              if(index>=values.length)return;
+              results[index]=await worker(values[index],index);
+            }
+          });
+          await Promise.all(runners);
+          return results;
+        };
         const nowSec=Date.now()/1000;
         const shanghai=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
         const weekday=(shanghai.getDay()+6)%7;
@@ -152,11 +182,14 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
         // Keep two prior weeks: before this week's first class the dashboard
         // falls back to last week and still needs the week-before-last baseline.
         const windowStart=monday.getTime()/1000-14*86400,windowEnd=monday.getTime()/1000+7*86400;
-        for(const pair of classes){
+        // CRM used to read all configured classes serially. With 50+ classes,
+        // network latency was multiplied by every class. Four workers keep the
+        // request rate conservative while reducing the wall-clock time.
+        const classBlocks=await mapLimit(classes,4,async pair=>{
           const classId=Number(pair[0]),hintedTermId=Number(pair[1]);
           const infoResp=await api(`https://lbk-crm-teacher-web-api.codemao.cn/term/getTermInfo?classId=${classId}`);
           const info=infoResp.data||{},termId=Number(info.termId||hintedTermId);
-          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0])){output.push({classId,termId,info,excluded:true,reason:"teacher"});continue;}
+          if((excludedTeachers||[]).includes(String(info.teacherName||"").split("-C")[0]))return finishClass({classId,termId,info:compactInfo(info),excluded:true,reason:"teacher"});
           const all=await api(`https://api-codecamp-crm.codemao.cn/terms/${termId}/courses/all`);
           const catalog=Array.isArray(all)?all:(all.data||[]);
           const lessons=catalog.filter(c=>/^\d+-/.test(String(c.course_name||""))&&!/赛考精讲课/.test(String(c.course_name||""))).sort((a,b)=>Number(a.unlock_time||0)-Number(b.unlock_time||0)||Number(a.course_number||0)-Number(b.course_number||0)).slice(0,50);
@@ -181,8 +214,9 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           }
           const merged=new Map();
           for(const x of items){const key=`${x.user_id}|${x.course_id}`,old=merged.get(key);if(!old){merged.set(key,x);continue;}const preferred=(x.is_finish||x.is_open)?x:old;merged.set(key,{...old,...preferred,is_open:Boolean(old.is_open||x.is_open),is_finish:Boolean(old.is_finish||x.is_finish)});}
-          output.push({classId,termId,info,lessons,items:[...merged.values()]});
-        }
+          return finishClass({classId,termId,info:compactInfo(info),lessons,items:[...merged.values()].map(compactItem)});
+        });
+        output.push(...classBlocks);
         // Timely participation must come from the CRM live-board API.  The
         // course-detail `live_course` flag represents total participation and
         // does not match the board's "观看人数" metric.
@@ -190,10 +224,9 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
         const firstBoards=await livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page:1,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]});
         let boards=firstBoards.data?.items||[];
         const boardPages=Math.ceil(Number(firstBoards.data?.total||boards.length)/Number(firstBoards.data?.pageSize||100));
-        for(let page=2;page<=boardPages;page++){
-          const next=await livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]});
-          boards.push(...(next.data?.items||[]));
-        }
+        const remainingPages=Array.from({length:Math.max(0,boardPages-1)},(_,index)=>index+2);
+        const boardResponses=await mapLimit(remainingPages,4,page=>livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]}));
+        for(const next of boardResponses)boards.push(...(next.data?.items||[]));
         if(!boards.length)throw new Error("CRM_LIVE_BOARDS_EMPTY");
         const studentIds=async(board,isParticipated)=>{
           let pageIndex=1,ids=[],names={};
@@ -207,6 +240,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           return {ids,names};
         };
         let matchedLiveBoards=0;
+        const liveMatches=[];
         const collectClassIds=value=>{
           const found=[];
           const visit=(node,key="")=>{
@@ -251,7 +285,20 @@ async function collectCrmData(classes,excludedTeachers=["薛超"]){
           }
           if(!targets.length)continue;
           matchedLiveBoards+=targets.length;
-          const attended=await studentIds(board,true),absent=await studentIds(board,false);
+          liveMatches.push({board,lessonNumber,targets});
+        }
+        // Fetch independent room rosters with bounded concurrency, then merge
+        // them in source order so duplicate-room reconciliation stays stable.
+        let completedLiveRooms=0;
+        const liveResults=await mapLimit(liveMatches,3,async match=>{
+          const [attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);
+          completedLiveRooms++;
+          if(completedLiveRooms===liveMatches.length||completedLiveRooms%10===0){
+            await onProgress("正在读取CRM直播上座名单…",`已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
+          }
+          return {...match,attended,absent};
+        });
+        for(const {board,lessonNumber,targets,attended,absent} of liveResults){
           for(const block of targets){
             block.liveAttendance=block.liveAttendance||{};
             const old=block.liveAttendance[lessonNumber]||{expectedIds:[],attendedIds:[],absentIds:[],names:{},boardIds:[]};
@@ -283,7 +330,7 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
     // authenticated CRM requests without depending on page-frame lifetime or
     // page CORS, which previously caused intermittent `Failed to fetch`.
     const data=await Promise.race([
-      collectCrmData(classes,excludedTeachers),
+      collectCrmData(classes,excludedTeachers,(message,detail)=>postLocalStatus("running",message,detail,"crm",localBase)),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_TOTAL_TIMEOUT")),5*60*1000)),
     ]);
     return {ok:true,data};
@@ -384,18 +431,33 @@ function serviceWeekendDates(){
   return dates;
 }
 
+function serviceTodayDate(){
+  const now=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
+  if(now.getHours()<14)return "";
+  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+}
+
 async function fetchServiceInCurrentChrome(){
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
-  const dates=serviceWeekendDates();
+  const dates=serviceWeekendDates(),todayDate=serviceTodayDate();
   try{
     await waitForTabReady(tab.id);
-    const results=await chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[dates],
-      func:async dates=>{try{
+    const results=await Promise.race([chrome.scripting.executeScript({
+      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate],
+      func:async(dates,todayDate)=>{try{
         const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
-        const api=async(url,options={})=>{const response=await fetch(url,{credentials:"include",...options});if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`CRM_HTTP_${response.status}:${url}`);return response.json();};
+        const api=async(url,options={})=>{
+          let lastError;
+          for(let attempt=1;attempt<=2;attempt++){
+            const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
+            try{const response=await fetch(url,{credentials:"include",...options,signal:controller.signal});if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`CRM_HTTP_${response.status}:${url}`);return await response.json();}
+            catch(error){lastError=error;if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,700));}
+            finally{clearTimeout(timer);}
+          }
+          throw new Error(`CRM_SERVICE_REQUEST_FAILED:${url}:${String(lastError?.message||lastError)}`);
+        };
         const csrfResponse=await api("/api/v1/security/csrf_token/").catch(()=>({result:""}));
         const csrf=csrfResponse.result||"";
         const fetchDashboard=async(id,kind)=>{
@@ -409,8 +471,11 @@ async function fetchServiceInCurrentChrome(){
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
-            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");});
-            if(dimension!=="老师")return named;
+            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>Number(normalize(b.slice_name||b.chart_name||b.name).includes("明细"))-Number(normalize(a.slice_name||a.chart_name||a.name).includes("明细")));
+            // The verified dashboards expose stable, descriptive chart names.
+            // Use those candidates directly; scanning every chart definition
+            // multiplied Superset requests and could leave the UI waiting.
+            if(named.length||dimension!=="老师")return named;
             const structural=[];
             for(const chart of charts){
               const name=normalize(chart.slice_name||chart.chart_name||chart.name);if(name.includes("趋势")||name.includes("团队")||name.includes("小组")||name.includes("战区")||name.includes("用户"))continue;
@@ -418,12 +483,12 @@ async function fetchServiceInCurrentChrome(){
             }
             return [...structural,...named.filter(chart=>!structural.some(item=>(item.id||item.slice_id)===(chart.id||chart.slice_id)))];
           };
-          const runChart=async(chart,dimension)=>{
+          const runChart=async(chart,dimension,filterDates)=>{
             const detail=await api(`/api/v1/chart/${chart.id||chart.slice_id}`),chartResult=detail.result||detail;
             const queryTemplate=JSON.parse(chartResult.query_context||"{}");
             const baseDesired=[];
             const add=(column,value)=>{if(column&&value!=null&&(!Array.isArray(value)||value.length))baseDesired.push({col:column,op:"IN",val:Array.isArray(value)?value:[value]});};
-            add(columns.date,dates);add(columns.zone,"AI C++教学部");
+            add(columns.date,filterDates);add(columns.zone,"AI C++教学部");
             if(kind==="wecom")add(columns.team,"深圳战区");else add(columns.department,["探月教学中心","深空教学中心"]);
             if(dimension==="老师")add(columns.group,"屹柯组");
             const serviceHours=["14","15","16","17","18","19","20","21"];
@@ -438,7 +503,7 @@ async function fetchServiceInCurrentChrome(){
               const extra=[];if(kind==="wecom"&&columns.timeType)extra.push({col:columns.timeType,op:"IN",val:["总计"]});if(columns.hour)extra.push({col:columns.hour,op:"IN",val:serviceHours});raw=await execute(extra);
             }
             if(!raw||!Array.isArray(raw.data))throw new Error(`CRM_SERVICE_TABLE_INVALID:${id}:${dimension}`);
-            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${dates.join(",")}`);
+            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${filterDates.join(",")}`);
             const verbose=raw.verbose_map||{},physical=(raw.colnames||Object.keys(raw.data[0]||{})).map(normalize);
             const wanted=kind==="im"
               ? ["worker_no","beisen_user_fullname","level_7_department_name","send_date","msg_send_hour","pre_teacher_3m_reply_cnt"]
@@ -458,21 +523,39 @@ async function fetchServiceInCurrentChrome(){
               if(!grouped.has(key))grouped.set(key,{worker_no:worker,beisen_user_fullname:name,level_7_department_name:group,sum:0,count:0});
               const item=grouped.get(key);item.sum+=value;item.count+=1;
             }
-            const rows=[...grouped.values()].map(item=>({worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[metricColumn]:`${item.sum/item.count}%`}));
+            const granular=raw.data.length>grouped.size;
+            const rows=[...grouped.values()].map(item=>{
+              const base={worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[metricColumn]:`${item.sum/item.count}%`};
+              // A detail table returns one valid question record per source row;
+              // its metric is the within-threshold answer flag (IM 3m / WeCom 2h).
+              // Only publish counts when the result is actually granular; this
+              // prevents an already-aggregated group chart from inventing counts.
+              if(granular){
+                const questionKey=kind==="im"?"im_question_count":"wecom_question_count",answerKey=kind==="im"?"im_answered_3m_count":"wecom_answered_2h_count";
+                base[questionKey]=item.count;base[answerKey]=Math.round(item.sum/100);base[metricColumn]=`${base[questionKey]?base[answerKey]/base[questionKey]*100:0}%`;
+              }
+              return base;
+            });
             if(!rows.length)throw new Error(`CRM_SERVICE_EMPTY_AFTER_FILTERS:${id}:${dimension}:${chart.slice_name||chart.chart_name||""}`);
-            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:resultHeaders,rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns};
+            const countHeaders=!granular?[]:(kind==="im"?["im_answered_3m_count","im_question_count"]:["wecom_answered_2h_count","wecom_question_count"]);
+            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:[...resultHeaders,...countHeaders],rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns,granular};
           };
-          const fetchDimension=async dimension=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
-          return {teacher:await fetchDimension("老师"),group:await fetchDimension("小组")};
+          const fetchDimension=async(dimension,filterDates)=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension,filterDates);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
+          const fetchRange=async filterDates=>{const [teacher,group]=await Promise.all([fetchDimension("老师",filterDates),fetchDimension("小组",filterDates)]);return {teacher,group};};
+          return {fetchRange};
         };
-        return JSON.stringify({dates,im:await fetchDashboard(382,"im"),wecom:await fetchDashboard(337,"wecom")});
+        const [imDashboard,wecomDashboard]=await Promise.all([fetchDashboard(382,"im"),fetchDashboard(337,"wecom")]);
+        const [im,wecom]=await Promise.all([imDashboard.fetchRange(dates),wecomDashboard.fetchRange(dates)]);
+        let today=null;
+        if(todayDate){try{const [todayIm,todayWecom]=await Promise.all([imDashboard.fetchRange([todayDate]),wecomDashboard.fetchRange([todayDate])]);today={dates:[todayDate],im:todayIm,wecom:todayWecom};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
+        return JSON.stringify({dates,im,wecom,today});
       }catch(error){return JSON.stringify({__serviceError:String(error?.stack||error?.message||error)});}
       }
-    });
+    }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),240000))]);
     const data=results[0]?.result;if(!data)return {ok:false,error:`当前 CRM 页面没有返回教学服务数据（诊断：tab=${tab.id}，results=${JSON.stringify(results)}）。`};
     try{const parsed=JSON.parse(data);if(parsed.__serviceError)return {ok:false,error:`CRM页面内读取失败：${parsed.__serviceError}`};}catch{}
     return {ok:true,data};
-  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":`教学服务数据读取失败：${text}`};}
+  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":text.includes("CRM_SERVICE_TOTAL_TIMEOUT")?"教学服务CRM读取超过4分钟，已自动终止，请确认Superset页面正常后重试。":`教学服务数据读取失败：${text}`};}
 }
 
 function nextWeeklyTime(day,value){
@@ -514,6 +597,27 @@ function utf8Base64(text){
   const bytes=new TextEncoder().encode(text);let binary="";
   for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
   return btoa(binary);
+}
+
+async function uploadCrmData(data,localBase=LOCAL_BASE){
+  const encoded=utf8Base64(data),chunkSize=256*1024,total=Math.ceil(encoded.length/chunkSize);
+  const uploadId=`crm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const send=async(url,body,timeout=20000)=>{
+    let lastError;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        const response=await fetchWithTimeout(`${localBase}${url}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)},timeout);
+        if(response.ok)return response;
+        lastError=new Error(`本地服务返回 ${response.status}`);
+      }catch(error){lastError=error;}
+      if(attempt<3)await new Promise(resolve=>setTimeout(resolve,400*attempt));
+    }
+    throw new Error(`本地数据分片传输失败：${String(lastError?.message||lastError||"连接中断")}`);
+  };
+  for(let index=0;index<total;index++){
+    await send("/extension-data-chunk",{uploadId,index,total,data:encoded.slice(index*chunkSize,(index+1)*chunkSize)});
+  }
+  return send("/extension-data-commit",{uploadId,total},30000);
 }
 
 async function waitForLocalCompletion(startedAt,timeout=10*60*1000,localBase=LOCAL_BASE){
@@ -585,11 +689,11 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
     const crm=await fetchInCrm(payload.classes||[],payload.excludedTeachers||["薛超"],0,localBase);
     if(!crm.ok)throw new Error(crm.error||"CRM读取失败");
     await postLocalStatus("running","CRM数据读取完成，正在启动本地计算…","","local",localBase);
-    const synced=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+    const synced=await uploadCrmData(crm.data,localBase);
     if(!synced.ok)throw new Error("本地更新脚本启动失败");
     if(!await waitForLocalRunner(now,20*1000,localBase)){
       await appendRunLog("本地脚本未进入计算阶段，自动重试启动",slotKey,localBase);
-      const retried=await fetchWithTimeout(`${localBase}/extension-data`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({data:utf8Base64(crm.data)})},30000);
+      const retried=await uploadCrmData(crm.data,localBase);
       if(!retried.ok)throw new Error("本地更新脚本自动重试启动失败");
     }
     const completed=await waitForLocalCompletion(now,10*60*1000,localBase);

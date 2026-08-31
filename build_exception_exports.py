@@ -143,15 +143,34 @@ def main():
     replay_students = {}
     live_rows = []
     overview = {}
+    term_first_unlock = {}
+    for block in blocks:
+        info = block.get("info", {})
+        class_id = int(block.get("classId") or info.get("classId") or 0)
+        main_term = main_term_by_class.get(class_id, int(block.get("termId") or info.get("termId") or 0))
+        lesson_times = [
+            int(lesson.get("unlock_time") or 0)
+            for lesson in block.get("lessons", [])
+            if int(lesson.get("course_number") or 0) > 0 and int(lesson.get("unlock_time") or 0) > 0
+        ]
+        if lesson_times:
+            first_unlock = min(lesson_times)
+            term_first_unlock[main_term] = min(term_first_unlock.get(main_term, first_unlock), first_unlock)
+    term_short_ids = {
+        term: datetime.fromtimestamp(first_unlock, CN).strftime("%m%d")
+        for term, first_unlock in term_first_unlock.items()
+    }
     for block in blocks:
         info = block.get("info", {})
         teacher = clean_teacher(info.get("teacherName"))
         class_id = int(block.get("classId") or info.get("classId") or 0)
         class_name = str(info.get("className") or "")
-        lessons = [lesson for lesson in block["lessons"] if 0 < int(lesson.get("course_number") or 0) <= 50]
-        lessons_by_number = {}
-        for lesson in sorted(lessons, key=lambda item: (int(item.get("unlock_time") or 0), int(item.get("course_id") or 0))):
-            lessons_by_number.setdefault(int(lesson.get("course_number") or 0), lesson)
+        lessons = [lesson for lesson in block["lessons"] if int(lesson.get("course_number") or 0) > 0]
+        lessons_by_time = {}
+        for lesson in sorted(lessons, key=lambda item: (int(item.get("unlock_time") or 0), int(item.get("course_number") or 0), int(item.get("course_id") or 0))):
+            unlock_time = int(lesson.get("unlock_time") or 0)
+            if unlock_time:
+                lessons_by_time.setdefault(unlock_time, []).append(lesson)
         items = block.get("items", [])
         slot = schedule_label(items)
         roster = {str(x.get("user_id")): str(x.get("child_name") or x.get("nickname") or "") for x in items if x.get("user_id")}
@@ -161,15 +180,22 @@ def main():
         class_absent = set()
         opened_live_numbers = []
         main_term = main_term_by_class.get(class_id, int(block.get("termId") or info.get("termId") or 0))
+        term_short_id = term_short_ids.get(main_term, "")
         teacher_key = (main_term, teacher)
         teacher_total = overview.setdefault(teacher_key, {"classes": set(), "arrival_expected": 0, "arrival_attend": 0, "live_expected": 0, "live_attend": 0, "finish_expected": 0, "finished": 0, "arrived_unfinished": 0, "unarrived": 0, "incomplete_ids": set(), "arrived_ids": set(), "live_absent_ids": set(), "replay_ids": set()})
-        for n in sorted(number for number in lessons_by_number if number % 2 == 0):
-            even = lessons_by_number[n]
+        # CRM course numbers are not guaranteed to remain odd/even or
+        # contiguous (older cohorts can reach 60 and some templates skip
+        # numbers). The two lessons sharing the same unlock time are the real
+        # weekly live/completion pair.
+        lesson_pairs = []
+        for unlock_time, same_time_lessons in sorted(lessons_by_time.items()):
+            ordered = sorted(same_time_lessons, key=lambda item: (int(item.get("course_number") or 0), int(item.get("course_id") or 0)))
+            if len(ordered) >= 2:
+                lesson_pairs.append((ordered[0], ordered[1]))
+        for first, even in lesson_pairs:
+            live_number = int(first.get("course_number") or 0)
             even_time = int(even.get("unlock_time") or 0)
             even_rows = [x for x in items if int(x.get("course_id") or 0) == int(even.get("course_id") or 0)]
-            first = lessons_by_number.get(n - 1)
-            if first is None:
-                continue
             first_time = int(first.get("unlock_time") or 0)
             first_rows = [x for x in items if int(x.get("course_id") or 0) == int(first.get("course_id") or 0)]
             first_arrived_ids = {str(x.get("user_id")) for x in first_rows if x.get("user_id") and bool(x.get("is_open"))}
@@ -188,7 +214,7 @@ def main():
                     if not uid:
                         continue
                     key = (teacher, class_id, uid)
-                    rec = abnormal.setdefault(key, {"teacher": teacher, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
+                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
                     if duration_over_two_hours(row):
                         rec["reasons"].add("完课时长大于2小时")
                     if not row.get("is_finish"):
@@ -204,7 +230,7 @@ def main():
             if pair_open and live_time <= now:
                 teacher_total["arrival_expected"] += len(live_items)
                 teacher_total["arrival_attend"] += len(first_arrived_ids)
-                board = (block.get("liveAttendance") or {}).get(str(n - 1)) or (block.get("liveAttendance") or {}).get(n - 1)
+                board = (block.get("liveAttendance") or {}).get(str(live_number)) or (block.get("liveAttendance") or {}).get(live_number)
                 if block.get("liveAttendance") and not board:
                     continue
                 attended_ids = set(str(x) for x in (board or {}).get("attendedIds", []))
@@ -213,7 +239,7 @@ def main():
                 live_expected = len(expected_ids) if board else len(live_items)
                 live_attend = len(attended_ids) if board else sum(attended(x) for x in live_items)
                 teacher_total["classes"].add(class_id)
-                opened_live_numbers.append(n - 1)
+                opened_live_numbers.append(live_number)
                 class_live_expected += live_expected
                 class_live_attend += live_attend
                 teacher_total["live_expected"] += live_expected
@@ -223,15 +249,15 @@ def main():
                     is_timely = uid in attended_ids if board else attended(row)
                     if uid and not is_timely and (int(row.get("watch_time") or 0) > 0 or float(row.get("watch_process") or 0) > 0):
                         teacher_total["replay_ids"].add(uid)
-                        replay_students[(teacher, class_id, uid, n - 1)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, n - 1, int(row.get("watch_time") or 0), float(row.get("watch_process") or 0) / 100, period]
+                        replay_students[(teacher, class_id, uid, live_number)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, int(row.get("watch_time") or 0), float(row.get("watch_process") or 0) / 100, period]
                 current_absent = absent_ids if board else set(str(row.get("user_id") or "") for row in live_items if not attended(row))
                 for uid in current_absent:
                     if not uid: continue
                     class_absent.add(uid)
                     teacher_total["live_absent_ids"].add(uid)
-                    untimely[(teacher, class_id, uid)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, n - 1, period]
+                    untimely[(teacher, class_id, uid)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, period]
                     key = (teacher, class_id, uid)
-                    rec = abnormal.setdefault(key, {"teacher": teacher, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
+                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
                     rec["reasons"].add("未参加直播")
         if class_live_expected:
             live_rows.append([teacher, slot, class_id, class_name, ",".join(map(str, opened_live_numbers)), class_live_expected, class_live_attend, class_live_expected - class_live_attend, len(class_absent), class_live_attend / class_live_expected, period])
@@ -246,9 +272,9 @@ def main():
             level = "二级｜未准时参播"
         else:
             level = "三级｜完课时长异常"
-        abnormal_rows.append([level, rec["teacher"], rec["student"], rec["id"], rec["slot"], category, period])
+        abnormal_rows.append([level, rec["teacher"], rec["termShortId"], rec["student"], rec["id"], rec["slot"], category, period])
     priority = {"一级｜未完课（最高）": 1, "二级｜未准时参播": 2, "三级｜完课时长异常": 3}
-    abnormal_rows.sort(key=lambda x: (priority.get(x[0], 9), x[1], ["周五晚", "周六午", "周六晚"].index(x[4]) if x[4] in ("周五晚", "周六午", "周六晚") else 9, x[2], x[3]))
+    abnormal_rows.sort(key=lambda x: (priority.get(x[0], 9), x[2], x[1], ["周五晚", "周六午", "周六晚"].index(x[5]) if x[5] in ("周五晚", "周六午", "周六晚") else 9, x[3], x[4]))
     category_specs = [
         ("一级｜未完课（最高）", "直播缺席｜未到课", "一级·直播缺席+未到课"),
         ("一级｜未完课（最高）", "直播缺席｜课程未完成", "一级·直播缺席+课程未完成"),
@@ -259,13 +285,13 @@ def main():
         ("三级｜完课时长异常", "完课时长偏长", "三级·时长偏长"),
     ]
     category_order = {category: index for index, (_, category, _) in enumerate(category_specs)}
-    category_levels = {row[5]: row[0] for row in abnormal_rows}
+    category_levels = {row[6]: row[0] for row in abnormal_rows}
     recommended_rows = [
         [category, *followup_scripts(category), period]
         for category in sorted(category_levels, key=lambda value: category_order.get(value, 99))
     ]
     grouped_students = {}
-    for level, teacher, _student, student_id, _slot, category, _period in abnormal_rows:
+    for level, teacher, _term_short_id, _student, student_id, _slot, category, _period in abnormal_rows:
         grouped_students.setdefault((teacher, level, category), set()).add(student_id)
     teacher_names = sorted({row[1] for row in abnormal_rows})
     abnormal_summary_rows = []
@@ -352,7 +378,7 @@ def main():
     tables = {
         "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "同期直播均值", "直播差值", "偶数课完课率", "同期完课均值", "完课差值", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
                  "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "同期直播均值": "float", "直播差值": "float", "偶数课完课率": "float", "同期完课均值": "float", "完课差值": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "同期直播均值": "0.0%", "直播差值": "0.0%", "偶数课完课率": "0.0%", "同期完课均值": "0.0%", "完课差值": "0.0%"}},
-        "异常学员": {"columns": ["异常等级", "老师姓名", "学生姓名", "学生ID", "班型", "异常原因", "统计周期"], "data": abnormal_rows,
+        "异常学员": {"columns": ["异常等级", "老师姓名", "课期ID", "学生姓名", "学生ID", "班型", "异常原因", "统计周期"], "data": abnormal_rows,
                  "summary": {"title": "各老师异常等级与学员类别汇总（按学员去重）", "columns": abnormal_summary_columns, "data": abnormal_summary_rows}},
         "推荐话术": {"columns": ["异常学员类别", "温和关怀型", "陪伴推进型", "积极鼓励型", "统计周期"], "data": recommended_rows},
         "未准时参播学员": {"columns": ["老师姓名", "学生姓名", "学生ID", "班型", "班级ID", "班级", "直播课节", "统计周期"], "data": untimely_rows,
