@@ -552,7 +552,13 @@ function Invoke-ExtensionUpdate($bodyText) {
     $startedAt = if ($previous -and $previous.startedAt) { [string]$previous.startedAt } else { Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
     Write-StatusObject 'running' 'CRM数据已接收，正在启动本地计算…' '' $startedAt 'local'
     $runner = Join-Path $sourceRoot 'run-direct-from-extension.ps1'
-    Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$runner+'"') -WindowStyle Hidden
+    if (-not (Test-Path -LiteralPath $runner)) { throw '本地计算启动器不存在，请执行“一键更新工作台”后重试。' }
+    $runnerArgs = @(
+        '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$runner+'"'),
+        '-RuntimeRoot',('"'+$root+'"'),'-PythonPath',('"'+$python+'"')
+    )
+    $process = Start-Process powershell.exe -ArgumentList $runnerArgs -WindowStyle Hidden -PassThru
+    if ($null -eq $process -or $process.Id -le 0) { throw '本地计算进程启动失败，请重新运行首次安装一键配置。' }
     return 'CRM data received. Building and syncing dashboards.'
 }
 
