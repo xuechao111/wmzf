@@ -1,6 +1,7 @@
 param([switch]$CheckOnly, [switch]$RuntimeOnly)
 
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $reportFile = Join-Path $root 'setup-report.txt'
 $lines = [Collections.Generic.List[string]]::new()

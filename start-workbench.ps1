@@ -6,6 +6,20 @@ $url = "http://127.0.0.1:$Port/"
 $infoUrl = $url + 'service-info'
 $bridge = Join-Path $root 'bridge.ps1'
 $setup = Join-Path $root 'setup-workbench.ps1'
+$startupReport = Join-Path $root 'startup-report.txt'
+[IO.File]::WriteAllText($startupReport,('启动时间：' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + [Environment]::NewLine),[Text.UTF8Encoding]::new($true))
+
+function Write-StartupStep([string]$message) {
+    Write-Host $message
+    [IO.File]::AppendAllText($startupReport,$message + [Environment]::NewLine,[Text.UTF8Encoding]::new($true))
+}
+
+trap {
+    $message = '启动失败：' + $_.Exception.Message
+    [IO.File]::AppendAllText($startupReport,$message + [Environment]::NewLine,[Text.UTF8Encoding]::new($true))
+    Write-Host $message -ForegroundColor Red
+    exit 1
+}
 
 function Test-Runtime([string]$path) {
     if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return $false }
@@ -51,6 +65,7 @@ function Stop-PortListener {
 }
 
 if (-not (Test-Path -LiteralPath $bridge)) { throw '工作台程序不完整：缺少 bridge.ps1。请重新下载完整 ZIP。' }
+Write-StartupStep '正在检查工作台运行环境…'
 
 $python = Find-WorkingRuntime @(
     (Join-Path $root 'runtime\python\python.exe'),
@@ -68,6 +83,7 @@ $node = Find-WorkingRuntime @(
 )
 
 if (-not $python -or -not $node) {
+    Write-StartupStep '检测到 Python 或 Node.js 缺失，正在自动配置；首次运行可能需要几分钟…'
     if (-not (Test-Path -LiteralPath $setup)) { throw '缺少运行环境和自动安装脚本，请重新下载完整 ZIP。' }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -RuntimeOnly
     if ($LASTEXITCODE -ne 0) { throw 'Python/Node.js 自动配置失败。请查看当前目录的 setup-report.txt。' }
@@ -76,6 +92,7 @@ if (-not $python -or -not $node) {
 $expectedHash = (Get-FileHash -LiteralPath $bridge -Algorithm SHA256).Hash
 $healthy = Test-CurrentService $expectedHash
 if (-not $healthy) {
+    Write-StartupStep '正在关闭旧版本服务并启动当前 ZIP 中的最新版…'
     # A page on this port is not enough: it may be an older workbench from a
     # different extracted ZIP. Stop it and bind this exact source directory.
     Stop-PortListener
@@ -91,4 +108,5 @@ if (-not $healthy) {
 }
 
 if (-not $healthy) { throw '当前版本本地服务启动失败。请查看 bridge-request-errors.log 和 setup-report.txt。' }
+Write-StartupStep '工作台本地服务已启动，正在打开页面…'
 if (-not $NoBrowser) { Start-Process $url }
