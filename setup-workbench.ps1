@@ -1,4 +1,4 @@
-param([switch]$CheckOnly)
+param([switch]$CheckOnly, [switch]$RuntimeOnly)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -117,7 +117,7 @@ try {
     $nodeReady = [bool](Find-Runtime @((Join-Path $root 'runtime\node\node.exe'),'node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe'))
     if (-not $nodeReady) { $nodeReady = Ensure-WingetPackage 'Node.js LTS' @('node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe') 'OpenJS.NodeJS.LTS' -Runtime }
     if (-not $nodeReady) { $nodeReady = Install-PortableNode }
-    $chromeReady = Ensure-WingetPackage 'Google Chrome' @('chrome.exe','%ProgramFiles%\Google\Chrome\Application\chrome.exe','%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe','%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe') 'Google.Chrome'
+    $chromeReady = if ($RuntimeOnly) { $true } else { Ensure-WingetPackage 'Google Chrome' @('chrome.exe','%ProgramFiles%\Google\Chrome\Application\chrome.exe','%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe','%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe') 'Google.Chrome' }
 
     $config = Join-Path $root 'dashboard-config.json'
     $configTemplate = Join-Path $root 'dashboard-config.portable.example.json'
@@ -130,7 +130,7 @@ try {
     $hiddenLauncher = Join-Path $root 'launch-dashboard-hidden.vbs'
     $desktop = [Environment]::GetFolderPath('Desktop')
     $shortcut = Join-Path $desktop 'CodeMao Teaching Workbench.lnk'
-    if (-not $CheckOnly -and (Test-Path -LiteralPath $hiddenLauncher)) {
+    if (-not $CheckOnly -and -not $RuntimeOnly -and (Test-Path -LiteralPath $hiddenLauncher)) {
         $shell = New-Object -ComObject WScript.Shell
         $link = $shell.CreateShortcut($shortcut)
         $link.TargetPath = $hiddenLauncher
@@ -143,6 +143,8 @@ try {
     $ready = $pythonReady -and $nodeReady -and $chromeReady
     if ($CheckOnly) {
         Add-Report ($(if($ready){'[PASS] Environment check passed.'}else{'[FAIL] Missing dependencies were detected.'}))
+    } elseif ($ready -and $RuntimeOnly) {
+        Add-Report '[DONE] Python and Node.js runtime check passed. The workbench can now start.'
     } elseif ($ready) {
         Add-Report '[NEXT] Chrome will open the Extensions page. Enable Developer mode, choose Load unpacked, and select the chrome-extension folder opened in Explorer.'
         Start-Process explorer.exe (Join-Path $root 'chrome-extension')

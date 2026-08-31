@@ -10,6 +10,10 @@ $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROO
     Split-Path -Parent $MyInvocation.MyCommand.Path
 }
 $sourceRoot = [IO.Path]::GetFullPath($sourceRoot)
+$bridgeBytes = [IO.File]::ReadAllBytes((Join-Path $sourceRoot 'bridge.ps1'))
+$bridgeHasher = [Security.Cryptography.SHA256]::Create()
+try { $bridgeSourceHash = ([BitConverter]::ToString($bridgeHasher.ComputeHash($bridgeBytes))).Replace('-','') }
+finally { $bridgeHasher.Dispose() }
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 if (-not (Test-Path -LiteralPath $root)) { [void](New-Item -ItemType Directory -Path $root -Force) }
@@ -689,6 +693,10 @@ while ($true) {
                 else { Send-Json $stream '共享密钥无效。' '403 Forbidden' }
             }
             '/assets/codemao-logo.png' { Send-File $stream (Join-Path $sourceRoot 'assets\codemao-logo.png') 'image/png' }
+            '/service-info' {
+                $info = [ordered]@{ bridgeHash=$bridgeSourceHash; sourceRoot=$sourceRoot; runtimeRoot=$root; port=$port; processId=$PID } | ConvertTo-Json -Compress
+                Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($info)) 'application/json; charset=utf-8'
+            }
             '/run' { Send-Json $stream (Invoke-LegacyUpdate) }
             '/status' { Repair-StaleStatus; Send-File $stream $statusFile 'application/json; charset=utf-8' }
             '/scholarship-status' { Send-ScholarshipStatus $stream }
