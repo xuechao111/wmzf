@@ -275,7 +275,7 @@ function Repair-ScholarshipStatus {
 function Send-ScholarshipStatus($stream) {
     Repair-ScholarshipStatus
     if (-not (Test-Path -LiteralPath $scholarshipStatusFile)) {
-        $payload = [ordered]@{state='idle';message='等待更新续费表格数据';detail='固定筛选：2026-08-01 · 首续 · 深圳战区';time='';startedAt=''} | ConvertTo-Json -Compress
+        $payload = [ordered]@{state='idle';message='等待更新续费表格数据';detail='请在工作台选择续费月份 · 首续 · 深圳战区';time='';startedAt=''} | ConvertTo-Json -Compress
         Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8'
         return
     }
@@ -292,10 +292,13 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
     $jsonText = [Text.Encoding]::UTF8.GetString($bytes)
     $parsed = $jsonText | ConvertFrom-Json
     if ($null -eq $parsed -or $null -eq $parsed.headers -or $null -eq $parsed.rows -or $parsed.rows.Count -eq 0) { throw '当前 Chrome CRM 页面返回了空数据。' }
+    $renewalMonth = [string]$payload.renewalMonth
+    if ($renewalMonth -notmatch '^\d{4}-(0[1-9]|1[0-2])-01$') { throw '请选择有效的续费月份。' }
+    if ([string]$parsed.renewalMonth -ne $renewalMonth) { throw '续费月份校验不一致，已停止写入。' }
     $sourceFile = Join-Path $root 'renewal-table-source.json'
     [IO.File]::WriteAllBytes($sourceFile,$bytes)
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-ScholarshipStatusObject 'running' '当前 Chrome 数据已接收，正在更新续费表格…' '固定筛选：2026-08-01 · 首续 · 深圳战区' $startedAt
+    Write-ScholarshipStatusObject 'running' '当前 Chrome 数据已接收，正在更新续费表格…' "筛选：$renewalMonth · 首续 · 深圳战区" $startedAt
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$scholarshipRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return '当前 Chrome 数据已接收，续费表格更新已启动。'
 }

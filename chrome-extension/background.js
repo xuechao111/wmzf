@@ -362,15 +362,16 @@ const RENEWAL_COLUMN_NAMES={
   student_ability_label:"学员能力标签",student_willing_label:"学员意愿标签",parent_will_label:"家长意愿标签",grade:"年级",cpp_user_label:"学员标签",
 };
 
-async function fetchRenewalInCurrentChrome(){
+async function fetchRenewalInCurrentChrome(renewalMonth){
+  const selectedMonth=/^\d{4}-(0[1-9]|1[0-2])-01$/.test(String(renewalMonth||""))?String(renewalMonth):"2026-08-01";
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录续费CRM后台；控制台不会启动新浏览器或新页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
   try{
     await waitForTabReady(tab.id);
     const results=await chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[RENEWAL_COLUMN_NAMES],
-      func:async columnNames=>{
+      target:{tabId:tab.id},world:"MAIN",args:[RENEWAL_COLUMN_NAMES,selectedMonth],
+      func:async(columnNames,selectedMonth)=>{
         if(!location.href.startsWith("https://bigdata-superset.codemao.cn/"))throw new Error("CRM_LOGIN_EXPIRED");
         const chartResponse=await fetch("/api/v1/chart/5014",{credentials:"include"});
         if(chartResponse.status===401||chartResponse.redirected)throw new Error("CRM_LOGIN_EXPIRED");
@@ -378,7 +379,7 @@ async function fetchRenewalInCurrentChrome(){
         const chart=await chartResponse.json();
         const query=JSON.parse(chart.result.query_context);
         const selectedFilters=[
-          {col:"renew_month",op:"IN",val:["2026-08-01"]},
+          {col:"renew_month",op:"IN",val:[selectedMonth]},
           {col:"renew_state",op:"IN",val:["首续"]},
           {col:"level_6_department_name",op:"IN",val:["深圳战区"]},
         ];
@@ -403,12 +404,12 @@ async function fetchRenewalInCurrentChrome(){
         const rows=raw.data.map(row=>Object.fromEntries(physical.map((column,index)=>[display[index],row[column]??row[display[index]]??""])));
         const rowcount=Number(raw.rowcount??rows.length);
         if(rowcount>rows.length)throw new Error(`CRM_DATA_TRUNCATED:${rows.length}/${rowcount}`);
-        return JSON.stringify({headers:display,rows,rowcount});
+        return JSON.stringify({headers:display,rows,rowcount,renewalMonth:selectedMonth});
       }
     });
     const data=results[0]?.result;
     if(!data)return {ok:false,error:"当前谷歌浏览器中的CRM页面没有返回续费数据。"};
-    return {ok:true,data,tabId:tab.id};
+    return {ok:true,data,tabId:tab.id,renewalMonth:selectedMonth};
   }catch(error){
     const text=String(error?.message||error);
     return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的CRM登录已失效，请在原页面登录后重试。":`续费CRM读取失败：${text}`};
@@ -774,10 +775,10 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"isolated-runtime-locks-19"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-people-metrics-20"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
-  if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome().then(sendResponse);return true;}
+  if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
   if(message.type==="fetch-service"){
     fetchServiceInCurrentChrome()
       .then(result=>sendResponse(result||{ok:false,error:"教学服务采集没有返回结果，请重试。"}))

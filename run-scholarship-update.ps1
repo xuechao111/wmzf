@@ -29,8 +29,11 @@ try {
     if (-not (Test-Path -LiteralPath $node)) { throw '未找到本地 Node.js 运行环境。' }
     if (-not (Test-Path -LiteralPath $script)) { throw '未找到续费表格更新脚本。' }
     if (-not (Test-Path -LiteralPath $InputFile)) { throw '未收到来自当前 Chrome CRM 页面的续费数据。' }
+    $sourceMeta = Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $renewalMonth = [string]$sourceMeta.renewalMonth
+    if ($renewalMonth -notmatch '^\d{4}-(0[1-9]|1[0-2])-01$') { throw '续费月份格式无效，应为 YYYY-MM-01。' }
 
-    Write-ScholarshipStatus 'running' '当前 Chrome 已读取完成，正在更新续费表格数据…' '固定筛选：2026-08-01 · 首续 · 深圳战区'
+    Write-ScholarshipStatus 'running' '当前 Chrome 已读取完成，正在更新续费表格数据…' "筛选：$renewalMonth · 首续 · 深圳战区"
     Set-Location -LiteralPath $root
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'

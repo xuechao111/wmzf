@@ -166,6 +166,9 @@ async function main() {
   if (!inputFile || !fs.existsSync(inputFile)) throw new Error("CRM_INPUT_FILE_NOT_FOUND");
   const source=JSON.parse(fs.readFileSync(inputFile,"utf8").replace(/^\uFEFF/,""));
   if (!Array.isArray(source.headers) || !Array.isArray(source.rows)) throw new Error("CRM_INPUT_INVALID");
+  const selectedMonth=String(source.renewalMonth||"");
+  if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(selectedMonth)) throw new Error("CRM_RENEWAL_MONTH_INVALID");
+  FILTERS["续费月份"]=selectedMonth;
   source.headers=source.headers.map(normalizeText);
   validateSource(source.headers,source.rows);
   console.log(`CRM_OK rows=${source.rows.length} columns=${source.headers.length}`);

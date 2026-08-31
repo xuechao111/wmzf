@@ -9,6 +9,7 @@ ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().pare
 GROUP = ROOT / "run-data" / "group-dashboard-tables.json"
 EXCEPTION = ROOT / "run-data" / "exception-export-tables.json"
 SNAPSHOT = ROOT / "dashboard-snapshot.json"
+CONFIG = ROOT / "dashboard-config.json"
 LIVE_TABLE = "班级直播上座"
 LIVE_EXTRA_COLUMNS = ["课期", "较上周对应时段准时直播 Gap"]
 LABELS = {
@@ -37,6 +38,14 @@ def load_tables() -> tuple[dict, dict]:
 
 def load_snapshot() -> dict:
     return json.loads(SNAPSHOT.read_text(encoding="utf-8")) if SNAPSHOT.exists() else {"classes": []}
+
+
+def comparison_teachers() -> set[str]:
+    try:
+        config = json.loads(CONFIG.read_text(encoding="utf-8")) if CONFIG.exists() else {}
+        return {str(name or "").strip() for name in config.get("comparisonTeachers", []) if str(name or "").strip()}
+    except (OSError, ValueError, TypeError):
+        return set()
 
 
 def class_key(value: object) -> str:
@@ -72,6 +81,7 @@ def main() -> None:
     tables, extra = load_tables()
     snapshot = load_snapshot()
     if mode == "meta":
+        comparison = comparison_teachers()
         abnormal_table = tables.get("异常学员", {})
         abnormal = abnormal_table.get("data", [])
         abnormal_columns = abnormal_table.get("columns", [])
@@ -83,7 +93,7 @@ def main() -> None:
                 continue
             teacher = str(row[teacher_index] or "").strip()
             level = str(row[level_index] or "").strip()
-            if not teacher:
+            if not teacher or teacher in comparison:
                 continue
             item = teacher_levels.setdefault(teacher, {"teacher": teacher, "level1": 0, "level2": 0, "level3": 0, "total": 0})
             item["total"] += 1
