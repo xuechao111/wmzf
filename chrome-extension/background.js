@@ -431,16 +431,22 @@ function serviceWeekendDates(){
   return dates;
 }
 
+function serviceTodayDate(){
+  const now=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
+  if(now.getHours()<14)return "";
+  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+}
+
 async function fetchServiceInCurrentChrome(){
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
-  const dates=serviceWeekendDates();
+  const dates=serviceWeekendDates(),todayDate=serviceTodayDate();
   try{
     await waitForTabReady(tab.id);
     const results=await Promise.race([chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[dates],
-      func:async dates=>{try{
+      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate],
+      func:async(dates,todayDate)=>{try{
         const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
         const api=async(url,options={})=>{
           let lastError;
@@ -465,7 +471,7 @@ async function fetchServiceInCurrentChrome(){
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
-            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");});
+            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>Number(normalize(b.slice_name||b.chart_name||b.name).includes("明细"))-Number(normalize(a.slice_name||a.chart_name||a.name).includes("明细")));
             // The verified dashboards expose stable, descriptive chart names.
             // Use those candidates directly; scanning every chart definition
             // multiplied Superset requests and could leave the UI waiting.
@@ -477,12 +483,12 @@ async function fetchServiceInCurrentChrome(){
             }
             return [...structural,...named.filter(chart=>!structural.some(item=>(item.id||item.slice_id)===(chart.id||chart.slice_id)))];
           };
-          const runChart=async(chart,dimension)=>{
+          const runChart=async(chart,dimension,filterDates)=>{
             const detail=await api(`/api/v1/chart/${chart.id||chart.slice_id}`),chartResult=detail.result||detail;
             const queryTemplate=JSON.parse(chartResult.query_context||"{}");
             const baseDesired=[];
             const add=(column,value)=>{if(column&&value!=null&&(!Array.isArray(value)||value.length))baseDesired.push({col:column,op:"IN",val:Array.isArray(value)?value:[value]});};
-            add(columns.date,dates);add(columns.zone,"AI C++教学部");
+            add(columns.date,filterDates);add(columns.zone,"AI C++教学部");
             if(kind==="wecom")add(columns.team,"深圳战区");else add(columns.department,["探月教学中心","深空教学中心"]);
             if(dimension==="老师")add(columns.group,"屹柯组");
             const serviceHours=["14","15","16","17","18","19","20","21"];
@@ -497,7 +503,7 @@ async function fetchServiceInCurrentChrome(){
               const extra=[];if(kind==="wecom"&&columns.timeType)extra.push({col:columns.timeType,op:"IN",val:["总计"]});if(columns.hour)extra.push({col:columns.hour,op:"IN",val:serviceHours});raw=await execute(extra);
             }
             if(!raw||!Array.isArray(raw.data))throw new Error(`CRM_SERVICE_TABLE_INVALID:${id}:${dimension}`);
-            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${dates.join(",")}`);
+            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${filterDates.join(",")}`);
             const verbose=raw.verbose_map||{},physical=(raw.colnames||Object.keys(raw.data[0]||{})).map(normalize);
             const wanted=kind==="im"
               ? ["worker_no","beisen_user_fullname","level_7_department_name","send_date","msg_send_hour","pre_teacher_3m_reply_cnt"]
@@ -517,23 +523,39 @@ async function fetchServiceInCurrentChrome(){
               if(!grouped.has(key))grouped.set(key,{worker_no:worker,beisen_user_fullname:name,level_7_department_name:group,sum:0,count:0});
               const item=grouped.get(key);item.sum+=value;item.count+=1;
             }
-            const rows=[...grouped.values()].map(item=>({worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[metricColumn]:`${item.sum/item.count}%`}));
+            const granular=raw.data.length>grouped.size;
+            const rows=[...grouped.values()].map(item=>{
+              const base={worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[metricColumn]:`${item.sum/item.count}%`};
+              // A detail table returns one valid question record per source row;
+              // its metric is the within-threshold answer flag (IM 3m / WeCom 2h).
+              // Only publish counts when the result is actually granular; this
+              // prevents an already-aggregated group chart from inventing counts.
+              if(granular){
+                const questionKey=kind==="im"?"im_question_count":"wecom_question_count",answerKey=kind==="im"?"im_answered_3m_count":"wecom_answered_2h_count";
+                base[questionKey]=item.count;base[answerKey]=Math.round(item.sum/100);base[metricColumn]=`${base[questionKey]?base[answerKey]/base[questionKey]*100:0}%`;
+              }
+              return base;
+            });
             if(!rows.length)throw new Error(`CRM_SERVICE_EMPTY_AFTER_FILTERS:${id}:${dimension}:${chart.slice_name||chart.chart_name||""}`);
-            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:resultHeaders,rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns};
+            const countHeaders=!granular?[]:(kind==="im"?["im_answered_3m_count","im_question_count"]:["wecom_answered_2h_count","wecom_question_count"]);
+            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:[...resultHeaders,...countHeaders],rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns,granular};
           };
-          const fetchDimension=async dimension=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
-          const [teacher,group]=await Promise.all([fetchDimension("老师"),fetchDimension("小组")]);
-          return {teacher,group};
+          const fetchDimension=async(dimension,filterDates)=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension,filterDates);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
+          const fetchRange=async filterDates=>{const [teacher,group]=await Promise.all([fetchDimension("老师",filterDates),fetchDimension("小组",filterDates)]);return {teacher,group};};
+          return {fetchRange};
         };
-        const [im,wecom]=await Promise.all([fetchDashboard(382,"im"),fetchDashboard(337,"wecom")]);
-        return JSON.stringify({dates,im,wecom});
+        const [imDashboard,wecomDashboard]=await Promise.all([fetchDashboard(382,"im"),fetchDashboard(337,"wecom")]);
+        const [im,wecom]=await Promise.all([imDashboard.fetchRange(dates),wecomDashboard.fetchRange(dates)]);
+        let today=null;
+        if(todayDate){try{const [todayIm,todayWecom]=await Promise.all([imDashboard.fetchRange([todayDate]),wecomDashboard.fetchRange([todayDate])]);today={dates:[todayDate],im:todayIm,wecom:todayWecom};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
+        return JSON.stringify({dates,im,wecom,today});
       }catch(error){return JSON.stringify({__serviceError:String(error?.stack||error?.message||error)});}
       }
-    }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),150000))]);
+    }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),240000))]);
     const data=results[0]?.result;if(!data)return {ok:false,error:`当前 CRM 页面没有返回教学服务数据（诊断：tab=${tab.id}，results=${JSON.stringify(results)}）。`};
     try{const parsed=JSON.parse(data);if(parsed.__serviceError)return {ok:false,error:`CRM页面内读取失败：${parsed.__serviceError}`};}catch{}
     return {ok:true,data};
-  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":text.includes("CRM_SERVICE_TOTAL_TIMEOUT")?"教学服务CRM读取超过2分30秒，已自动终止，请确认Superset页面正常后重试。":`教学服务数据读取失败：${text}`};}
+  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的 Superset 登录已失效，请在原页面登录后重试。":text.includes("CRM_SERVICE_TOTAL_TIMEOUT")?"教学服务CRM读取超过4分钟，已自动终止，请确认Superset页面正常后重试。":`教学服务数据读取失败：${text}`};}
 }
 
 function nextWeeklyTime(day,value){
@@ -752,7 +774,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"isolated-runtime-locks-19"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-people-metrics-20"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome().then(sendResponse);return true;}

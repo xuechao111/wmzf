@@ -72,12 +72,33 @@ def main() -> None:
     tables, extra = load_tables()
     snapshot = load_snapshot()
     if mode == "meta":
-        abnormal = tables.get("异常学员", {}).get("data", [])
+        abnormal_table = tables.get("异常学员", {})
+        abnormal = abnormal_table.get("data", [])
+        abnormal_columns = abnormal_table.get("columns", [])
+        level_index = abnormal_columns.index("异常等级") if "异常等级" in abnormal_columns else 0
+        teacher_index = abnormal_columns.index("老师姓名") if "老师姓名" in abnormal_columns else 1
+        teacher_levels: dict[str, dict[str, int | str]] = {}
+        for row in abnormal:
+            if len(row) <= max(level_index, teacher_index):
+                continue
+            teacher = str(row[teacher_index] or "").strip()
+            level = str(row[level_index] or "").strip()
+            if not teacher:
+                continue
+            item = teacher_levels.setdefault(teacher, {"teacher": teacher, "level1": 0, "level2": 0, "level3": 0, "total": 0})
+            item["total"] += 1
+            if level.startswith("一级"):
+                item["level1"] += 1
+            elif level.startswith("二级"):
+                item["level2"] += 1
+            elif level.startswith("三级"):
+                item["level3"] += 1
         abnormal_stats = {
             "total": len(abnormal),
-            "level1": sum(str(row[0]).startswith("一级") for row in abnormal if row),
-            "level2": sum(str(row[0]).startswith("二级") for row in abnormal if row),
-            "level3": sum(str(row[0]).startswith("三级") for row in abnormal if row),
+            "level1": sum(str(row[level_index]).startswith("一级") for row in abnormal if len(row) > level_index),
+            "level2": sum(str(row[level_index]).startswith("二级") for row in abnormal if len(row) > level_index),
+            "level3": sum(str(row[level_index]).startswith("三级") for row in abnormal if len(row) > level_index),
+            "byTeacher": sorted(teacher_levels.values(), key=lambda item: (-int(item["total"]), str(item["teacher"]))),
         }
         payload = {
             "period": extra.get("period", ""),
