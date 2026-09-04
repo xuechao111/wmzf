@@ -112,11 +112,13 @@ function Install-PortableNode {
 try {
     Add-Report ('CodeMao workbench setup - ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
     Add-Report ('Install directory: ' + $root)
-    $pythonReady = [bool](Find-Runtime @((Join-Path $root 'runtime\python\python.exe'),'%LOCALAPPDATA%\Programs\Python\Python314\python.exe','%LOCALAPPDATA%\Programs\Python\Python313\python.exe','%LOCALAPPDATA%\Programs\Python\Python312\python.exe','%ProgramFiles%\Python314\python.exe','%ProgramFiles%\Python313\python.exe','%ProgramFiles%\Python312\python.exe','python.exe'))
-    if (-not $pythonReady) { $pythonReady = Ensure-WingetPackage 'Python 3.12' @('%LOCALAPPDATA%\Programs\Python\Python312\python.exe','%ProgramFiles%\Python312\python.exe','python.exe') 'Python.Python.3.12' -Runtime }
+    $forcePortablePython = $env:HF_FORCE_PORTABLE_PYTHON -eq '1'
+    $pythonReady = if ($forcePortablePython) { $false } else { [bool](Find-Runtime @((Join-Path $root 'runtime\python\python.exe'),'%LOCALAPPDATA%\Programs\Python\Python314\python.exe','%LOCALAPPDATA%\Programs\Python\Python313\python.exe','%LOCALAPPDATA%\Programs\Python\Python312\python.exe','%ProgramFiles%\Python314\python.exe','%ProgramFiles%\Python313\python.exe','%ProgramFiles%\Python312\python.exe','python.exe')) }
+    if (-not $pythonReady -and -not $forcePortablePython) { $pythonReady = Ensure-WingetPackage 'Python 3.12' @('%LOCALAPPDATA%\Programs\Python\Python312\python.exe','%ProgramFiles%\Python312\python.exe','python.exe') 'Python.Python.3.12' -Runtime }
     if (-not $pythonReady) { $pythonReady = Install-PortablePython }
-    $nodeReady = [bool](Find-Runtime @((Join-Path $root 'runtime\node\node.exe'),'node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe'))
-    if (-not $nodeReady) { $nodeReady = Ensure-WingetPackage 'Node.js LTS' @('node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe') 'OpenJS.NodeJS.LTS' -Runtime }
+    $forcePortableNode = $env:HF_FORCE_PORTABLE_NODE -eq '1'
+    $nodeReady = if ($forcePortableNode) { $false } else { [bool](Find-Runtime @((Join-Path $root 'runtime\node\node.exe'),'node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe')) }
+    if (-not $nodeReady -and -not $forcePortableNode) { $nodeReady = Ensure-WingetPackage 'Node.js LTS' @('node.exe','%ProgramFiles%\nodejs\node.exe','%LOCALAPPDATA%\Programs\nodejs\node.exe') 'OpenJS.NodeJS.LTS' -Runtime }
     if (-not $nodeReady) { $nodeReady = Install-PortableNode }
     $chromeReady = if ($RuntimeOnly) { $true } else { Ensure-WingetPackage 'Google Chrome' @('chrome.exe','%ProgramFiles%\Google\Chrome\Application\chrome.exe','%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe','%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe') 'Google.Chrome' }
 

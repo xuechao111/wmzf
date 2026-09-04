@@ -57,11 +57,31 @@ try {
     $lastSuccess = if ($previous -and $previous.lastSuccessTime) { [string]$previous.lastSuccessTime } else { '' }
     $started = [ordered]@{state='running';message='本地计算进程已启动，正在生成看板…';detail=('Python：' + [IO.Path]::GetFileName($python));time=$now;startedAt=$startedAt;phase='local';lastSuccessTime=$lastSuccess} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($statusFile,$started,$utf8NoBom)
-    & $python -u $script --from-raw *> $log
-    $exitCode = $LASTEXITCODE
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $python
+    $startInfo.Arguments = '-u "' + $script + '" --from-raw'
+    $startInfo.WorkingDirectory = $sourceRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw 'Python 进程未能启动。' }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    [IO.File]::WriteAllText($log,($stdout + $stderr),$utf8NoBom)
+    $exitCode = $process.ExitCode
+    $process.Dispose()
     if ($exitCode -ne 0) {
-        $tail = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log -Tail 8 -ErrorAction SilentlyContinue) -join '；' } else { '' }
-        Write-RunnerFailure ("Python 异常退出（代码 $exitCode）。$tail")
+        $lines = @($stderr -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $cause = if ($lines.Count) { [string]$lines[-1] } else { "请查看 $log" }
+        Write-RunnerFailure ("Python 异常退出（代码 $exitCode）：$cause")
         exit $exitCode
     }
 } catch {

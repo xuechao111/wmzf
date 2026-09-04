@@ -29,7 +29,7 @@ $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\depe
 function Test-PythonRuntime([string]$candidate) {
     if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) { return $false }
     try {
-        $probe = Start-Process -FilePath $candidate -ArgumentList '--version' -WindowStyle Hidden -Wait -PassThru
+        $probe = Start-Process -FilePath $candidate -ArgumentList '-c','"import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 2)"' -WindowStyle Hidden -Wait -PassThru
         return $probe.ExitCode -eq 0
     } catch { return $false }
 }

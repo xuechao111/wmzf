@@ -40,22 +40,23 @@ trap {
     exit 1
 }
 
-function Test-Runtime([string]$path) {
+function Test-Runtime([string]$path, [string]$kind = '') {
     if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return $false }
     try {
-        $process = Start-Process -FilePath $path -ArgumentList '--version' -WindowStyle Hidden -Wait -PassThru
+        $arguments = if ($kind -eq 'python') { @('-c','"import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 2)"') } elseif ($kind -eq 'node') { @('-e','"process.exit(Number(process.versions.node.split(''.'')[0]) >= 18 ? 0 : 2)"') } else { @('--version') }
+        $process = Start-Process -FilePath $path -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
         return $process.ExitCode -eq 0
     } catch { return $false }
 }
 
-function Find-WorkingRuntime([string[]]$candidates) {
+function Find-WorkingRuntime([string[]]$candidates, [string]$kind) {
     foreach ($candidate in $candidates) {
         $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
         if (-not [IO.Path]::IsPathRooted($expanded)) {
             $command = Get-Command $expanded -ErrorAction SilentlyContinue
             $expanded = if ($command) { $command.Source } else { '' }
         }
-        if (Test-Runtime $expanded) { return $expanded }
+        if (Test-Runtime $expanded $kind) { return $expanded }
     }
     return $null
 }
@@ -86,7 +87,7 @@ function Stop-PortListener {
 if (-not (Test-Path -LiteralPath $bridge)) { throw '工作台程序不完整：缺少 bridge.ps1。请重新下载完整 ZIP。' }
 Write-StartupStep '正在检查工作台运行环境…'
 
-$python = Find-WorkingRuntime @(
+$pythonCandidates = @(
     (Join-Path $sourceRoot 'runtime\python\python.exe'),
     '%LOCALAPPDATA%\Programs\Python\Python314\python.exe',
     '%LOCALAPPDATA%\Programs\Python\Python313\python.exe',
@@ -94,18 +95,25 @@ $python = Find-WorkingRuntime @(
     'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe',
     'python.exe'
 )
-$node = Find-WorkingRuntime @(
+$nodeCandidates = @(
     (Join-Path $sourceRoot 'runtime\node\node.exe'),
     '%ProgramFiles%\nodejs\node.exe',
     'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe',
     'node.exe'
 )
+$python = Find-WorkingRuntime $pythonCandidates 'python'
+$node = Find-WorkingRuntime $nodeCandidates 'node'
 
 if (-not $python -or -not $node) {
     Write-StartupStep '检测到 Python 或 Node.js 缺失，正在自动配置；首次运行可能需要几分钟…'
     if (-not (Test-Path -LiteralPath $setup)) { throw '缺少运行环境和自动安装脚本，请重新下载完整 ZIP。' }
+    $env:HF_FORCE_PORTABLE_PYTHON = if ($python) { '0' } else { '1' }
+    $env:HF_FORCE_PORTABLE_NODE = if ($node) { '0' } else { '1' }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -RuntimeOnly
     if ($LASTEXITCODE -ne 0) { throw 'Python/Node.js 自动配置失败。请查看当前目录的 setup-report.txt。' }
+    $python = Find-WorkingRuntime $pythonCandidates 'python'
+    $node = Find-WorkingRuntime $nodeCandidates 'node'
+    if (-not $python -or -not $node) { throw '自动配置后运行环境仍不符合要求（Python 需 3.9+，Node.js 需 18+）。请查看 setup-report.txt。' }
 }
 
 $expectedHash = (Get-FileHash -LiteralPath $bridge -Algorithm SHA256).Hash
