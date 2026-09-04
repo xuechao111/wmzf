@@ -224,17 +224,16 @@ def period_metrics(block, start, end, now, allow_detail_live=False):
             result["latestOpenedTime"] = max(result["latestOpenedTime"], live_time)
             board = (block.get("liveAttendance") or {}).get(str(live_number)) or (block.get("liveAttendance") or {}).get(live_number)
             if not board:
-                if not allow_detail_live:
-                    # Group members remain protected by the authoritative
-                    # live-board gate; an absent room can never become a zero.
-                    result["missingLiveBoards"] += 1
-                    continue
-                # Explicitly configured same-cohort comparison teachers may
-                # not be visible to this group's live-room API. In that case
-                # use CRM course-detail's live_course participation flag.
+                # Some CRM accounts cannot see every live-room roster even
+                # though the course-detail response still contains each
+                # learner's authoritative live_course participation flag.
+                # Use that per-learner fallback instead of aborting the entire
+                # group's completion update or silently treating the class as
+                # zero attendance.
                 expected_ids = {str(x.get("user_id")) for x in live_rows if x.get("user_id")}
                 attended_ids = {str(x.get("user_id")) for x in live_rows if x.get("user_id") and bool(x.get("live_course"))}
                 absent_ids = expected_ids - attended_ids
+                result["missingLiveBoards"] += 1
                 result["detailLiveFallbacks"] += 1
             else:
                 attended_ids = set(str(x) for x in (board or {}).get("attendedIds", []))
@@ -453,8 +452,6 @@ def main():
         }
         rows.append(row)
     missing_live = [f"{item['cohort']} {item['teacher']}" for item in rows if item["current"].get("missingLiveBoards")]
-    if missing_live:
-        raise RuntimeError("CRM直播房间数据不完整，已保留上一轮正确看板：" + "、".join(missing_live))
     rows.sort(key=lambda x: (x["cohort"], -x["current"]["finishRate"], -x["current"]["liveRate"], x["teacher"]))
     by_cohort = {}
     for row in rows: by_cohort.setdefault(row["cohort"], []).append(row)
@@ -470,7 +467,7 @@ def main():
             row["cohortFinishGap"] = row["current"]["finishRate"] - finish_avg
     arrival_expected = sum(x["current"]["arrivalExpected"] for x in rows); live_expected = sum(x["current"]["liveExpected"] for x in rows); even_expected = sum(x["current"]["evenExpected"] for x in rows)
     cohort_week_labels = {datetime.fromtimestamp(start, CN).strftime("%Y-%m-%d周"): datetime.fromtimestamp(max(weeks), CN).strftime("%Y-%m-%d周") for start, weeks in cohort_opened_weeks.items() if weeks}
-    snapshot = {"updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "serviceUpdatedAt": service_updated_at, "weeks": labels, "cohortWeeks": cohort_week_labels, "cohorts": sorted(by_cohort), "rows": rows, "classes": classes,
+    snapshot = {"updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "serviceUpdatedAt": service_updated_at, "weeks": labels, "cohortWeeks": cohort_week_labels, "cohorts": sorted(by_cohort), "rows": rows, "classes": classes, "liveFallbackTeachers": missing_live,
                 "summary": {"teachers": len(rows), "classes": len(classes), "arrivalRate": pct(sum(x["current"]["arrivalAttend"] for x in rows), arrival_expected), "liveRate": pct(sum(x["current"]["liveAttend"] for x in rows), live_expected), "replayRate": pct(sum(x["current"]["replayAttend"] for x in rows), live_expected), "finishRate": pct(sum(x["current"]["evenDone"] for x in rows), even_expected)}}
     OUT.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
 

@@ -789,6 +789,7 @@ def run(from_raw: bool = False) -> None:
         lines = [line.strip() for line in snapshot_build.stdout.splitlines() if line.strip()]
         message = lines[-1].removeprefix("RuntimeError: ") if lines else "教学看板完整性校验失败，已保留上一轮数据。"
         raise RuntimeError(message)
+    snapshot_payload = json.loads((ROOT / "dashboard-snapshot.json").read_text(encoding="utf-8"))
     subprocess.run([sys.executable, str(SOURCE_ROOT / "build_exception_exports.py")], cwd=ROOT, check=True)
     export = json.loads((DATA / "exception-export-tables.json").read_text(encoding="utf-8"))
 
@@ -818,6 +819,9 @@ def run(from_raw: bool = False) -> None:
         timings[name] = round(time.monotonic() - sheet_started, 1)
         print(f"{name} 写入完成：{counts[name]} 行，耗时 {timings[name]:.1f} 秒", flush=True)
     detail = "；".join(f"{name} {count} 行" for name, count in counts.items())
+    fallback_teachers = snapshot_payload.get("liveFallbackTeachers") or []
+    if fallback_teachers:
+        detail += "；直播房间名单缺失已使用CRM课程参播记录：" + "、".join(map(str, fallback_teachers))
     elapsed = int(time.monotonic() - started)
     print("各子表耗时：" + "；".join(f"{name} {seconds:.1f}秒" for name, seconds in timings.items()), flush=True)
     set_status("success", f"组内教学数据更新完成（{elapsed // 60} 分 {elapsed % 60} 秒）。", detail)

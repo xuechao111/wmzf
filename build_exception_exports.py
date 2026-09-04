@@ -231,11 +231,14 @@ def main():
                 teacher_total["arrival_expected"] += len(live_items)
                 teacher_total["arrival_attend"] += len(first_arrived_ids)
                 board = (block.get("liveAttendance") or {}).get(str(live_number)) or (block.get("liveAttendance") or {}).get(live_number)
-                if block.get("liveAttendance") and not board:
-                    continue
-                attended_ids = set(str(x) for x in (board or {}).get("attendedIds", []))
-                expected_ids = set(str(x) for x in (board or {}).get("expectedIds", []))
-                absent_ids = set(str(x) for x in (board or {}).get("absentIds", []))
+                if board:
+                    attended_ids = set(str(x) for x in board.get("attendedIds", []))
+                    expected_ids = set(str(x) for x in board.get("expectedIds", []))
+                    absent_ids = set(str(x) for x in board.get("absentIds", []))
+                else:
+                    expected_ids = {str(x.get("user_id")) for x in live_items if x.get("user_id")}
+                    attended_ids = {str(x.get("user_id")) for x in live_items if x.get("user_id") and bool(x.get("live_course"))}
+                    absent_ids = expected_ids - attended_ids
                 live_expected = len(expected_ids) if board else len(live_items)
                 live_attend = len(attended_ids) if board else sum(attended(x) for x in live_items)
                 teacher_total["classes"].add(class_id)
