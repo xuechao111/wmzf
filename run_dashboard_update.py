@@ -264,7 +264,9 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
             break
         except urllib.error.HTTPError as exc:
             if attempt >= attempts or exc.code not in (408, 429, 500, 502, 503, 504):
-                raise
+                if exc.code in (401, 403):
+                    raise RuntimeError("钉钉连接无权访问当前文档。请把目标文档共享给该钉钉连接所属账号并授予编辑权限，或更换为该组长自己的钉钉连接地址。") from exc
+                raise RuntimeError(f"钉钉接口请求失败（HTTP {exc.code}）。请检查钉钉连接地址和目标文档权限。") from exc
             delay = 1.5 * attempt
             print(f"钉钉接口 {name} 暂时异常（HTTP {exc.code}），{delay:.1f} 秒后重试 {attempt + 1}/{attempts}…", flush=True)
             touch_status(f"钉钉接口 {name} 暂时波动，准备重试 {attempt + 1}/{attempts}")

@@ -510,14 +510,21 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
     $script = Join-Path $sourceRoot 'prepare_extension_update.py'
     $response = Join-Path $root 'extension-classes.json'
+    $prepareErrorFile = Join-Path $root 'prepare-error.json'
+    Remove-Item -LiteralPath $response -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $prepareErrorFile -Force -ErrorAction SilentlyContinue
     # Run inside the already-hidden bridge process. Start-Process rebuilds the
     # inherited environment and fails when Windows contains both Path and PATH.
-    $prepareOutput = @(& $python '-X' 'utf8' $script $response 2>&1)
+    $prepareOutput = @(& $python '-X' 'utf8' $script $response $prepareErrorFile 2>&1)
     $prepareExitCode = $LASTEXITCODE
     if ($prepareExitCode -ne 0 -or -not (Test-Path $response)) {
         $config = Get-DashboardConfig
+        $structuredError = $null
+        if (Test-Path -LiteralPath $prepareErrorFile) { try { $structuredError = Get-Content -LiteralPath $prepareErrorFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
         $detail = if (@($config.classes).Count -eq 0 -and [string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl)) {
             '配置不完整：请填写钉钉连接地址，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
+        } elseif ($structuredError -and -not [string]::IsNullOrWhiteSpace([string]$structuredError.message)) {
+            '读取班级配置失败：' + [string]$structuredError.message
         } elseif ($prepareOutput.Count -gt 0) {
             '读取班级配置失败：' + [string]$prepareOutput[-1]
         } else {
