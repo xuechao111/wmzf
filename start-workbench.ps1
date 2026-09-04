@@ -1,18 +1,37 @@
 ﻿param([switch]$NoBrowser, [int]$Port = 8765)
 
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
+$sourceRoot = [IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
+$runtimeRoot = Join-Path $env:LOCALAPPDATA 'CodeMaoTeachingWorkbench\data'
+if (-not (Test-Path -LiteralPath $runtimeRoot)) { [void](New-Item -ItemType Directory -Path $runtimeRoot -Force) }
 $url = "http://127.0.0.1:$Port/"
 $infoUrl = $url + 'service-info'
-$bridge = Join-Path $root 'bridge.ps1'
-$setup = Join-Path $root 'setup-workbench.ps1'
-$startupReport = Join-Path $root 'startup-report.txt'
+$bridge = Join-Path $sourceRoot 'bridge.ps1'
+$setup = Join-Path $sourceRoot 'setup-workbench.ps1'
+$startupReport = Join-Path $sourceRoot 'startup-report.txt'
 [IO.File]::WriteAllText($startupReport,('启动时间：' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + [Environment]::NewLine),[Text.UTF8Encoding]::new($true))
 
 function Write-StartupStep([string]$message) {
     Write-Host $message
     [IO.File]::AppendAllText($startupReport,$message + [Environment]::NewLine,[Text.UTF8Encoding]::new($true))
 }
+
+function Import-ExistingLocalState {
+    # Older releases kept private state beside the ZIP source. Move it once to
+    # a stable per-Windows-user directory so a new extraction never resets it.
+    foreach ($name in @('dashboard-config.json','share-config.json','dashboard-snapshot.json','extension-classes.json','service-data.json','status.json','service-status.json','scholarship-status.json')) {
+        $old = Join-Path $sourceRoot $name
+        $new = Join-Path $runtimeRoot $name
+        if (-not (Test-Path -LiteralPath $new) -and (Test-Path -LiteralPath $old)) { Copy-Item -LiteralPath $old -Destination $new -Force }
+    }
+    foreach ($name in @('run-data','crm-browser-profile')) {
+        $old = Join-Path $sourceRoot $name
+        $new = Join-Path $runtimeRoot $name
+        if (-not (Test-Path -LiteralPath $new) -and (Test-Path -LiteralPath $old)) { Copy-Item -LiteralPath $old -Destination $new -Recurse -Force }
+    }
+}
+
+Import-ExistingLocalState
 
 trap {
     $message = '启动失败：' + $_.Exception.Message
@@ -47,7 +66,7 @@ function Test-CurrentService([string]$expectedHash) {
         if ($response.StatusCode -ne 200) { return $false }
         $info = $response.Content | ConvertFrom-Json
         $actualSource = [IO.Path]::GetFullPath([string]$info.sourceRoot).TrimEnd('\')
-        return ([string]$info.bridgeHash -eq $expectedHash -and $actualSource -ieq $root.TrimEnd('\'))
+        return ([string]$info.bridgeHash -eq $expectedHash -and $actualSource -ieq $sourceRoot.TrimEnd('\') -and [IO.Path]::GetFullPath([string]$info.runtimeRoot).TrimEnd('\') -ieq $runtimeRoot.TrimEnd('\'))
     } catch { return $false }
 }
 
@@ -68,7 +87,7 @@ if (-not (Test-Path -LiteralPath $bridge)) { throw '工作台程序不完整：�
 Write-StartupStep '正在检查工作台运行环境…'
 
 $python = Find-WorkingRuntime @(
-    (Join-Path $root 'runtime\python\python.exe'),
+    (Join-Path $sourceRoot 'runtime\python\python.exe'),
     '%LOCALAPPDATA%\Programs\Python\Python314\python.exe',
     '%LOCALAPPDATA%\Programs\Python\Python313\python.exe',
     '%LOCALAPPDATA%\Programs\Python\Python312\python.exe',
@@ -76,7 +95,7 @@ $python = Find-WorkingRuntime @(
     'python.exe'
 )
 $node = Find-WorkingRuntime @(
-    (Join-Path $root 'runtime\node\node.exe'),
+    (Join-Path $sourceRoot 'runtime\node\node.exe'),
     '%ProgramFiles%\nodejs\node.exe',
     'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe',
     'node.exe'
@@ -96,8 +115,8 @@ if (-not $healthy) {
     # A page on this port is not enough: it may be an older workbench from a
     # different extracted ZIP. Stop it and bind this exact source directory.
     Stop-PortListener
-    $env:HF_DASHBOARD_ROOT = $root
-    $env:HF_DASHBOARD_SOURCE_ROOT = $root
+    $env:HF_DASHBOARD_ROOT = $runtimeRoot
+    $env:HF_DASHBOARD_SOURCE_ROOT = $sourceRoot
     $env:HF_DASHBOARD_PORT = [string]$Port
     $env:HF_DASHBOARD_NO_OPEN = '1'
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $bridge + '"') -WindowStyle Hidden

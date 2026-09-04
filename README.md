@@ -10,7 +10,7 @@
 - 未安装 Git、不是仓库或无法快进时，会依次尝试 Codeload、GitHub 和 GitHub API 下载 ZIP。
 - 无法连接远程服务器时，把最新版 ZIP 重命名为 `工作台离线更新包.zip`，放进工作台目录，再点击“一键更新工作台”即可离线覆盖更新。
 - 更新完成后自动隐藏重启当前工作台。
-- 本机的 `dashboard-config.json`、`share-config.json`、`instances/`、CRM 登录资料、运行数据、看板快照、日志和密钥均不会被覆盖。
+- 本机配置、CRM 登录资料、运行数据、看板快照、日志和密钥保存在 `%LOCALAPPDATA%\CodeMaoTeachingWorkbench\data`，关机、退出、重新解压 ZIP 和一键更新均不会覆盖。
 
 新电脑首次部署可直接下载并解压：[main 分支 ZIP](https://github.com/xuechao111/wmzf/archive/refs/heads/main.zip)。完成配置后，以后直接点击首页按钮更新即可。
 
@@ -30,7 +30,7 @@
 
 ## 配置隔离
 
-每台电脑的 `dashboard-config.json`、CRM 登录状态和运行数据均相互独立。仓库只提供配置示例，不提交正式工作台密钥、CRM 浏览器资料、学员数据、运行日志或生成后的看板快照。
+每台电脑的配置、CRM 登录状态和运行数据都保存在该 Windows 用户自己的 `%LOCALAPPDATA%\CodeMaoTeachingWorkbench\data`，相互独立。旧版首次升级时会自动迁移解压目录中的现有配置；仓库只提供配置示例，不提交密钥、CRM 浏览器资料、学员数据、运行日志或生成后的看板快照。
 
 ## 测试工作台副本
 
