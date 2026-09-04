@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "编程猫教学控制台连接器",
+  "version": "1.6.17",
+  "description": "让本地教学控制台使用当前Chrome中已登录的编程猫CRM页面。",
+  "permissions": ["tabs", "scripting", "alarms", "storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "http://127.0.0.1:8766/*",
+    "http://localhost:8766/*",
+    "https://codecamp-crm.codemao.cn/*",
+    "https://lbk-crm-teacher-web-api.codemao.cn/*",
+    "https://api-codecamp-crm.codemao.cn/*",
+    "https://cloud-gateway.codemao.cn/*",
+    "https://bigdata-superset.codemao.cn/*"
+  ],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1:8765/*", "http://localhost:8765/*", "http://127.0.0.1:8766/*", "http://localhost:8766/*"],
+    "js": ["bridge.js"],
+    "run_at": "document_start"
+  }]
+}

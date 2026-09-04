@@ -1,0 +1,16 @@
+{
+  "displayTitle": "深圳战区 · 示例组",
+  "displaySubtitle": "教学数据展示系统",
+  "workbookUrl": "https://alidocs.dingtalk.com/i/nodes/请替换为自己的工作簿",
+  "dingtalkConnectionUrl": "https://请填写管理员提供的连接地址/mcp",
+  "dingtalkAccessKey": "",
+  "renewalWorkbookUrl": "",
+  "renewalSheetId": "",
+  "classes": [
+    [130001, 18001],
+    [130002, 18001]
+  ],
+  "excludedTeachers": ["薛超"],
+  "shareEnabled": false,
+  "shareTitle": "示例组教学数据共享看板"
+}

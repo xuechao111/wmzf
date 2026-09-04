@@ -1,0 +1,15 @@
+{
+  "displayTitle": "教学数据工作台",
+  "displaySubtitle": "组内教学数据展示系统",
+  "workbookUrl": "",
+  "dingtalkConnectionUrl": "",
+  "portableMode": true,
+  "renewalWorkbookUrl": "",
+  "renewalSheetId": "",
+  "serviceWorkbookUrl": "",
+  "classes": [],
+  "excludedTeachers": [],
+  "comparisonTeachers": [],
+  "shareEnabled": false,
+  "shareTitle": "组内教学数据共享看板"
+}

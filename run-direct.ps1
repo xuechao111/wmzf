@@ -1,0 +1,17 @@
+﻿$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = $env:HF_DASHBOARD_ROOT
+if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
+$bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$portablePython = Join-Path $sourceRoot 'runtime\python\python.exe'
+$python = if (Test-Path -LiteralPath $portablePython) { $portablePython } elseif (Test-Path -LiteralPath $bundledPython) { $bundledPython } else {
+    $resolved = ''
+    foreach ($name in @('python3','python.exe','python')) { $command = Get-Command $name -ErrorAction SilentlyContinue; if ($command) { $resolved = $command.Source; break } }
+    $resolved
+}
+$script = Join-Path $sourceRoot 'run_dashboard_update.py'
+$log = Join-Path $root 'update.log'
+if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python)) {
+    [IO.File]::WriteAllText($log, 'Python runtime not found.', [Text.Encoding]::UTF8)
+    exit 1
+}
+& $python -u $script *> $log
