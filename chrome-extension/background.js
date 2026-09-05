@@ -472,14 +472,14 @@ async function fetchServiceInCurrentChrome(){
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
-            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>Number(normalize(a.slice_name||a.chart_name||a.name).includes("明细"))-Number(normalize(b.slice_name||b.chart_name||b.name).includes("明细")));
+            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势")&&!(kind==="im"&&name.includes("明细"));}).sort((a,b)=>{const nameA=normalize(a.slice_name||a.chart_name||a.name),nameB=normalize(b.slice_name||b.chart_name||b.name),preferred=name=>Number(!(dimension==="老师"?name==="老师数据":name.includes("小组数据（聚合）")));return preferred(nameA)-preferred(nameB)||Number(nameA.includes("明细"))-Number(nameB.includes("明细"));});
             // The verified dashboards expose stable, descriptive chart names.
             // Use those candidates directly; scanning every chart definition
             // multiplied Superset requests and could leave the UI waiting.
             if(named.length||dimension!=="老师")return named;
             const structural=[];
             for(const chart of charts){
-              const name=normalize(chart.slice_name||chart.chart_name||chart.name);if(name.includes("趋势")||name.includes("团队")||name.includes("小组")||name.includes("战区")||name.includes("用户"))continue;
+              const name=normalize(chart.slice_name||chart.chart_name||chart.name);if(name.includes("趋势")||name.includes("团队")||name.includes("小组")||name.includes("战区")||name.includes("用户")||(kind==="im"&&name.includes("明细")))continue;
               try{const detail=await api(`/api/v1/chart/${chart.id||chart.slice_id}`),queryText=normalize((detail.result||detail).query_context||"");if((queryText.includes("worker_no")||queryText.includes("beisen_user_fullname"))&&(kind!=="wecom"||queryText.includes("avg_2hour_reply_rate"))&&(kind!=="im"||queryText.includes("pre_teacher_3m_reply_cnt")))structural.push(chart);}catch{}
             }
             return [...structural,...named.filter(chart=>!structural.some(item=>(item.id||item.slice_id)===(chart.id||chart.slice_id)))];
@@ -507,13 +507,14 @@ async function fetchServiceInCurrentChrome(){
             if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${filterDates.join(",")}`);
             const verbose=raw.verbose_map||{},physical=(raw.colnames||Object.keys(raw.data[0]||{})).map(normalize);
             const label=column=>normalize(verbose[column]||column),findColumn=(aliases,exclude=[])=>physical.find(column=>{const value=`${column} ${label(column)}`.toLowerCase();return aliases.some(alias=>value.includes(alias.toLowerCase()))&&!exclude.some(alias=>value.includes(alias.toLowerCase()));})||"";
+            const workerColumn=findColumn(["worker_no","老师工号"]),teacherColumn=findColumn(["beisen_user_fullname","老师姓名","老师"],["工号"]),groupColumn=findColumn(["level_7_department_name","小组"]);
             const wanted=kind==="im"
               ? ["worker_no","beisen_user_fullname","level_7_department_name","send_date","msg_send_hour","pre_teacher_3m_reply_cnt"]
               : ["worker_no","beisen_user_fullname","level_7_department_name","statistics_date","stat_date","avg_2hour_reply_rate"];
             const metricColumn=findColumn(kind==="im"?["pre_teacher_3m_reply_cnt","3分钟回复率"]:["avg_2hour_reply_rate","2小时回复率","2h回复率"]);
             if(!metricColumn)throw new Error(`CRM_SERVICE_METRIC_NOT_FOUND:${id}:${dimension}:${physical.map(column=>`${column}=${label(column)}`).join("|")}`);
-            if(dimension==="老师"&&!physical.some(column=>column==="worker_no"||column==="beisen_user_fullname"))throw new Error(`CRM_SERVICE_TEACHER_COLUMNS_NOT_FOUND:${id}:${physical.join("|")}`);
-            if(dimension==="小组"&&!physical.includes("level_7_department_name"))throw new Error(`CRM_SERVICE_GROUP_COLUMN_NOT_FOUND:${id}:${physical.join("|")}`);
+            if(dimension==="老师"&&!workerColumn&&!teacherColumn)throw new Error(`CRM_SERVICE_TEACHER_COLUMNS_NOT_FOUND:${id}:${physical.map(column=>`${column}=${label(column)}`).join("|")}`);
+            if(dimension==="小组"&&!groupColumn)throw new Error(`CRM_SERVICE_GROUP_COLUMN_NOT_FOUND:${id}:${physical.map(column=>`${column}=${label(column)}`).join("|")}`);
             const selected=physical.filter(column=>wanted.includes(column));
             const resultHeaders=selected.length?selected:physical;
             const percent=value=>{const text=normalize(value);if(!text)return null;const number=Number(text.replace("%",""));if(!Number.isFinite(number))return null;return text.includes("%")?number:(Math.abs(number)<=1?number*100:number);};
@@ -523,7 +524,7 @@ async function fetchServiceInCurrentChrome(){
             }:{};
             const grouped=new Map();
             for(const sourceRow of raw.data){
-              const name=normalize(sourceRow.beisen_user_fullname),worker=normalize(sourceRow.worker_no),group=normalize(sourceRow.level_7_department_name);
+              const name=normalize(sourceRow[teacherColumn]),worker=normalize(sourceRow[workerColumn]),group=normalize(sourceRow[groupColumn]);
               const key=dimension==="老师"?(worker||name):group,value=percent(sourceRow[metricColumn]);
               if(!key||(value==null&&kind!=="im"))continue;
               if(!grouped.has(key))grouped.set(key,{worker_no:worker,beisen_user_fullname:name,level_7_department_name:group,rates:[],counts:{},percentages:{}});
@@ -539,7 +540,7 @@ async function fetchServiceInCurrentChrome(){
             const countHeaders=kind==="im"?["pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceCallRate","voiceConnectRate","voiceUsageRate","videoCallUsers","videoCallCoverage","videoDialCount","videoCallRate","videoConnectRate","videoUsageRate","videoAverageMinutes"]:["avg_2hour_reply_rate"];
             return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:[...resultHeaders,...countHeaders],rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns,granular:false,aggregation:"summary-chart"};
           };
-          const fetchDimension=async(dimension,filterDates)=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension,filterDates);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
+          const fetchDimension=async(dimension,filterDates)=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension,filterDates);if(table.rows.length)return {...table,candidateAttempts:attempts};}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
           const fetchRange=async filterDates=>{const [teacher,group]=await Promise.all([fetchDimension("老师",filterDates),fetchDimension("小组",filterDates)]);return {teacher,group};};
           return {fetchRange};
         };
@@ -773,7 +774,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-summary-metrics-21"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-summary-dynamic-columns-22"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
