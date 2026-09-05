@@ -478,7 +478,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
-            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势")&&!(kind==="im"&&name.includes("明细"));}).sort((a,b)=>{const nameA=normalize(a.slice_name||a.chart_name||a.name),nameB=normalize(b.slice_name||b.chart_name||b.name),preferred=name=>Number(!(dimension==="老师"?name==="老师数据":name.includes("小组数据（聚合）")));return preferred(nameA)-preferred(nameB)||Number(nameA.includes("明细"))-Number(nameB.includes("明细"));});
+            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>{const nameA=normalize(a.slice_name||a.chart_name||a.name),nameB=normalize(b.slice_name||b.chart_name||b.name),preferred=name=>Number(!(dimension==="老师"?name==="老师数据":name.includes("小组数据（聚合）")));return preferred(nameA)-preferred(nameB)||Number(nameA.includes("明细"))-Number(nameB.includes("明细"));});
             // The verified dashboards expose stable, descriptive chart names.
             // Use those candidates directly; scanning every chart definition
             // multiplied Superset requests and could leave the UI waiting.
@@ -555,7 +555,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
         let today=null;
         if(todayDate){try{const [todayIm,todayWecom]=await Promise.all([imDashboard.fetchRange([todayDate]),wecomDashboard.fetchRange([todayDate])]);today={dates:[todayDate],im:todayIm,wecom:todayWecom};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
         return JSON.stringify({dates,im,wecom,today,serviceSelection});
-      }catch(error){return JSON.stringify({__serviceError:String(error?.stack||error?.message||error)});}
+      }catch(error){return JSON.stringify({__serviceError:String(error?.message||error)});}
       }
     }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),240000))]);
     const data=results[0]?.result;if(!data)return {ok:false,error:`当前 CRM 页面没有返回教学服务数据（诊断：tab=${tab.id}，results=${JSON.stringify(results)}）。`};
@@ -780,7 +780,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-summary-validation-24"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-detail-fallback-25"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
