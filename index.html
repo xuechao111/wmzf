@@ -124,6 +124,70 @@
       #page-home .run-btn{min-height:106px}
     }
     @media(max-width:680px){#page-home .secondary-actions{grid-template-columns:1fr}}
+
+    /* Workbench visual theme v3. Rollback baseline: 7aef009.
+       Cool midnight / indigo palette with the dashboard as the primary action. */
+    #page-home{background:
+      radial-gradient(circle at 77% 4%,rgba(99,102,241,.10),transparent 25%),
+      radial-gradient(circle at 20% 92%,rgba(56,189,248,.07),transparent 28%),
+      linear-gradient(145deg,#f6f8fc 0%,#eef2f7 100%)}
+    #page-home .hero{background:linear-gradient(145deg,#fff 0%,#fbfcff 68%,#f1f4fb 100%)}
+    #page-home .hero:before{right:-82px;top:-125px;width:315px;height:315px;background:linear-gradient(145deg,rgba(99,102,241,.13),rgba(56,189,248,.04))}
+    #page-home .hero:after{background:linear-gradient(180deg,#111d3a 0%,#4f5bd5 54%,#38a6c8 100%)}
+    #page-home .kicker{color:#5a62d5}
+    #page-home .home-title{color:#111f3a}
+    #page-home .home-title small{color:#334a70}
+    #page-home .quick{border-color:#dce3ef;background:linear-gradient(145deg,#fff,#f3f6fb);box-shadow:0 9px 24px rgba(35,48,89,.045)}
+    #page-home .quick:after{background:#5363e6}
+    #page-home .quick:nth-child(2):after{background:#8b5cf6}
+    #page-home .quick:nth-child(3):after{background:#2498c3}
+    #page-home .quick b{color:#172541}
+    #page-home .quick span{color:#718096}
+
+    #page-home .primary-actions{grid-template-columns:minmax(0,1.42fr) minmax(520px,1fr);grid-template-areas:
+      "view secondary"
+      "run schedule"
+      "renewal-status service-status";
+      border-color:#dce3ef;background:rgba(248,250,254,.92);box-shadow:inset 0 1px 0 #fff,0 14px 38px rgba(31,44,80,.055)}
+    #page-home .view-btn{grid-area:view;position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:flex-start;min-height:160px;padding:28px;border:1px solid rgba(69,78,180,.38);background:linear-gradient(135deg,#101d3a 0%,#263a78 55%,#5661df 132%);box-shadow:0 17px 34px rgba(35,45,105,.24);font-size:18px;text-align:left;letter-spacing:.025em}
+    #page-home .view-btn:before{content:"DATA WORKSPACE";position:absolute;left:28px;top:27px;color:#aeb8ff;font:800 10px inherit;letter-spacing:.18em}
+    #page-home .view-btn:after{content:"";position:absolute;right:-34px;top:-58px;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle,rgba(124,134,255,.22),rgba(124,134,255,.04) 55%,transparent 57%);box-shadow:0 0 0 25px rgba(255,255,255,.025)}
+    #page-home .view-btn:hover{transform:translateY(-2px);box-shadow:0 21px 42px rgba(35,45,105,.30)}
+    #page-home .run-btn{grid-area:run;min-height:72px;padding:16px 20px;border:1px solid #d7def1;background:linear-gradient(145deg,#f4f6ff,#e9edfb);box-shadow:none;color:#283967;font-size:13px}
+    #page-home .run-btn:before{display:none}
+    #page-home .run-btn:after{content:"数据同步";left:auto;right:17px;top:50%;transform:translateY(-50%);padding:5px 8px;border:1px solid #ccd4ef;border-radius:999px;background:rgba(255,255,255,.72);color:#6572a5;font:800 9px inherit;letter-spacing:.08em}
+    #page-home .run-btn small{margin-top:5px;color:#7280a4;font-size:10px}
+    #page-home .run-btn:hover{transform:translateY(-1px);border-color:#bac4e7;background:linear-gradient(145deg,#f7f8ff,#e4e9fb);box-shadow:0 8px 18px rgba(65,76,140,.10)}
+
+    #page-home .renewal-action,#page-home .service-action{border-color:#dce3ef;background:linear-gradient(155deg,#fff,#f4f6fb);box-shadow:0 8px 20px rgba(36,48,87,.04)}
+    #page-home .service-action{background:linear-gradient(155deg,#fff,#f1f5ff)}
+    #page-home .scholarship-btn{background:#edf1f9;color:#263a64}
+    #page-home .service-filter-title span{color:#344a79}
+    #page-home .service-day-picks b{border-color:#d7deed;color:#718097}
+    #page-home .service-day-picks input:checked+b{border-color:#6975dc;background:#e9ebff;color:#3f4ec5;box-shadow:inset 0 0 0 1px rgba(105,117,220,.10)}
+    #page-home .service-time-fields label{border-color:#d8dfed}
+    #page-home .service-btn{border-color:#cbd3f0;background:#edf0ff;color:#4050bd}
+    #page-home .service-btn small{color:#747eae}
+    #page-home .schedule-btn{grid-area:schedule;align-self:stretch;border-color:#d5dcf1;background:linear-gradient(145deg,#f1f3ff,#e7eaf9);color:#3c4a91}
+    #page-home .schedule-btn small{color:#7781aa}
+    #page-home .scholarship-status{border-color:#d8e0ed;background:#f0f4f8;color:#526b82}
+    #page-home .service-status{border-color:#d4dcf0;background:#f0f2fc;color:#5d6795}
+    #page-home .status-card:before{background:linear-gradient(#5965dc,#35a5c5)}
+    #page-home .pill{border-color:#d6dcf6;background:#eef0ff;color:#4b57c5}
+    #page-home .status-message{border-color:#cce4df;background:linear-gradient(145deg,#eff9f6,#e7f5f1);color:#236b61;box-shadow:inset 4px 0 0 #28a38f}
+    #page-home .dataset-item:hover{border-color:#bac5e6;background:#fff}
+    #page-home .links-card .ghost:hover{border-color:#b7c1e4;background:#f2f4ff}
+
+    @media(min-width:1081px) and (max-width:1499px){
+      #page-home .primary-actions{grid-template-columns:1fr 1fr;grid-template-areas:"view view" "secondary secondary" "run schedule" "renewal-status service-status"}
+      #page-home .view-btn{min-height:128px}
+      #page-home .run-btn{min-height:70px}
+    }
+    @media(max-width:1080px){
+      #page-home .primary-actions{grid-template-columns:1fr;grid-template-areas:"view" "secondary" "run" "schedule" "renewal-status" "service-status"}
+      #page-home .view-btn{min-height:124px}
+      #page-home .run-btn{min-height:68px}
+    }
     </style>
 </head>
 <body>
