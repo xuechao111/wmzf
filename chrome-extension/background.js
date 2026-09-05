@@ -416,38 +416,44 @@ async function fetchRenewalInCurrentChrome(renewalMonth){
   }
 }
 
-function serviceWeekendDates(){
+function normalizeServiceSelection(value={}){
+  const days=Array.isArray(value.days)?[...new Set(value.days.map(Number).filter(day=>Number.isInteger(day)&&day>=0&&day<=6))]:[];
+  const startHour=Number(value.startHour),endHour=Number(value.endHour),safeStart=Number.isInteger(startHour)&&startHour>=0&&startHour<=23?startHour:14,safeEnd=Number.isInteger(endHour)&&endHour>=safeStart&&endHour<=23?endHour:Math.max(safeStart,21);
+  return {days:days.length?days:[5,6,0],startHour:safeStart,endHour:safeEnd,hours:Array.from({length:safeEnd-safeStart+1},(_,index)=>String(safeStart+index).padStart(2,"0"))};
+}
+
+function serviceSelectedDates(selection){
   const now=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
   const today=new Date(now);today.setHours(0,0,0,0);
   const weekday=(today.getDay()+6)%7,monday=new Date(today);monday.setDate(today.getDate()-weekday);
   const dates=[];
   const format=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
-  for(const offset of [4,5,6]){
+  const offsets=selection.days.map(day=>(day+6)%7).sort((a,b)=>a-b);
+  for(const offset of offsets){
     const date=new Date(monday);date.setDate(monday.getDate()+offset);
-    if(date<today||(date.getTime()===today.getTime()&&now.getHours()>=14))dates.push(format(date));
+    if(date<today||(date.getTime()===today.getTime()&&now.getHours()>=selection.startHour))dates.push(format(date));
   }
-  // Monday-Friday before the 14:00 service window has no current-week rows.
-  // Keep the board usable by selecting the latest complete Fri-Sun window.
-  if(!dates.length)for(const offset of [4,5,6]){const date=new Date(monday);date.setDate(monday.getDate()+offset-7);dates.push(format(date));}
+  // If this week's selected window has not started, use the latest complete one.
+  if(!dates.length)for(const offset of offsets){const date=new Date(monday);date.setDate(monday.getDate()+offset-7);dates.push(format(date));}
   return dates;
 }
 
-function serviceTodayDate(){
+function serviceTodayDate(selection){
   const now=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
-  if(now.getHours()<14)return "";
+  if(!selection.days.includes(now.getDay())||now.getHours()<selection.startHour)return "";
   return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 }
 
-async function fetchServiceInCurrentChrome(){
+async function fetchServiceInCurrentChrome(requestedSelection){
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
-  const dates=serviceWeekendDates(),todayDate=serviceTodayDate();
+  const serviceSelection=normalizeServiceSelection(requestedSelection),dates=serviceSelectedDates(serviceSelection),todayDate=serviceTodayDate(serviceSelection);
   try{
     await waitForTabReady(tab.id);
     const results=await Promise.race([chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate],
-      func:async(dates,todayDate)=>{try{
+      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate,serviceSelection],
+      func:async(dates,todayDate,serviceSelection)=>{try{
         const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
         const api=async(url,options={})=>{
           let lastError;
@@ -492,7 +498,7 @@ async function fetchServiceInCurrentChrome(){
             add(columns.date,filterDates);add(columns.zone,"AI C++教学部");
             if(kind==="wecom")add(columns.team,"深圳战区");else add(columns.department,["探月教学中心","深空教学中心"]);
             if(dimension==="老师")add(columns.group,"屹柯组");
-            const serviceHours=["14","15","16","17","18","19","20","21"];
+            const serviceHours=serviceSelection.hours;
             const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
             const execute=async extraFilters=>{const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col)||filter.op==="TEMPORAL_RANGE");item.filters.push(...desired);item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
             let raw;
@@ -548,7 +554,7 @@ async function fetchServiceInCurrentChrome(){
         const [im,wecom]=await Promise.all([imDashboard.fetchRange(dates),wecomDashboard.fetchRange(dates)]);
         let today=null;
         if(todayDate){try{const [todayIm,todayWecom]=await Promise.all([imDashboard.fetchRange([todayDate]),wecomDashboard.fetchRange([todayDate])]);today={dates:[todayDate],im:todayIm,wecom:todayWecom};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
-        return JSON.stringify({dates,im,wecom,today});
+        return JSON.stringify({dates,im,wecom,today,serviceSelection});
       }catch(error){return JSON.stringify({__serviceError:String(error?.stack||error?.message||error)});}
       }
     }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),240000))]);
@@ -774,12 +780,12 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-summary-dynamic-columns-22"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-range-controls-23"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
   if(message.type==="fetch-service"){
-    fetchServiceInCurrentChrome()
+    fetchServiceInCurrentChrome(message.serviceSelection)
       .then(result=>sendResponse(result||{ok:false,error:"教学服务采集没有返回结果，请重试。"}))
       .catch(error=>sendResponse({ok:false,error:`教学服务数据读取失败：${String(error?.message||error)}`}));
     return true;
