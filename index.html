@@ -44,6 +44,86 @@
     #page-home{padding:22px 24px 24px}.home-layout{grid-template-columns:minmax(700px,1fr) minmax(360px,430px);gap:16px}.hero{padding:clamp(30px,2.7vw,48px);align-content:center;gap:30px}.hero h1{margin:10px 0 0;font-size:clamp(38px,2.75vw,54px);line-height:1.06}.quick-stats{gap:10px;margin:0 0 16px}.quick{padding:14px 16px}.quick b{font-size:22px}.primary-actions{grid-template-columns:minmax(0,1.55fr) minmax(500px,1fr);gap:10px}.secondary-actions{grid-template-columns:minmax(180px,.78fr) minmax(290px,1.22fr);gap:10px}.run-btn,.view-btn,.schedule-btn{border-radius:14px}.run-btn{min-height:164px;padding:22px 24px}.view-btn,.schedule-btn{min-height:58px;padding:15px 18px}.renewal-action,.service-action{height:100%;border-radius:13px}.service-action{grid-template-rows:auto auto auto 1fr}.service-action>.service-btn{align-self:end}.scholarship-status,.service-status{padding:9px 12px;font-size:11px}.right-stack{gap:12px}.status-card{padding:17px}.dataset-card{padding:18px}.dataset-list{margin-top:11px;gap:7px}.dataset-item{padding:9px 11px}.links-card{padding:11px}.card{border-radius:19px}
     @media(min-width:1081px) and (max-width:1499px){#page-home{padding:18px}.home-layout{grid-template-columns:minmax(650px,1fr) minmax(320px,360px)}.hero{padding:30px;gap:24px}.primary-actions{grid-template-columns:1fr 1fr}.primary-actions>.run-btn,.primary-actions>.secondary-actions{grid-column:1/-1}.secondary-actions{grid-template-columns:1fr 1fr}.run-btn{min-height:96px}.hero h1{font-size:40px}}
     @media(max-width:1080px){.secondary-actions{grid-template-columns:1fr 1fr}.hero{gap:24px}.run-btn{min-height:92px}}@media(max-width:680px){.secondary-actions{grid-template-columns:1fr}}
+
+    /* Workbench visual theme v2. Rollback baseline: cbc6b01.
+       Presentation only: update behavior, data contracts and destinations are unchanged. */
+    #page-home{background:
+      radial-gradient(circle at 82% 5%,rgba(178,108,74,.085),transparent 24%),
+      linear-gradient(145deg,#f2f6f8 0%,#edf3f5 100%)}
+    #page-home .card{border-color:#dbe6e9;box-shadow:0 18px 48px rgba(24,52,68,.075)}
+    #page-home .hero{position:relative;overflow:hidden;background:
+      linear-gradient(145deg,rgba(255,255,255,.99),rgba(250,252,252,.97) 66%,rgba(240,247,246,.94));
+      border-top:1px solid rgba(255,255,255,.98)}
+    #page-home .hero:before{content:"";position:absolute;right:-92px;top:-112px;width:300px;height:300px;border-radius:50%;background:linear-gradient(145deg,rgba(187,111,79,.12),rgba(205,142,111,.045));pointer-events:none}
+    #page-home .hero:after{content:"";position:absolute;left:0;top:0;width:5px;height:100%;background:linear-gradient(180deg,#183f58 0%,#1d7f75 58%,#c3825e 100%);opacity:.92;pointer-events:none}
+    #page-home .hero>div{position:relative;z-index:1}
+    #page-home .kicker{color:#a85f43;letter-spacing:.22em}
+    #page-home .home-title{color:#122d40;letter-spacing:-.035em}
+    #page-home .home-title small{margin-top:8px;color:#234b62;letter-spacing:-.025em}
+    #page-home .quick-stats{gap:12px;margin-bottom:18px}
+    #page-home .quick{position:relative;overflow:hidden;padding:16px 18px;border-color:#d7e3e7;background:linear-gradient(145deg,#fff,#f2f7f8);box-shadow:0 8px 20px rgba(24,61,86,.04)}
+    #page-home .quick:after{content:"";position:absolute;left:18px;bottom:0;width:34px;height:3px;border-radius:4px 4px 0 0;background:#2d756f}
+    #page-home .quick:nth-child(2):after{background:#b57858}
+    #page-home .quick:nth-child(3):after{background:#315f79}
+    #page-home .quick b{color:#17364a;letter-spacing:-.035em}
+    #page-home .quick span{margin-top:7px;color:#69808e;letter-spacing:.025em}
+
+    #page-home .primary-actions{grid-template-columns:minmax(0,1.42fr) minmax(520px,1fr);grid-template-areas:
+      "run secondary"
+      "view schedule"
+      "renewal-status service-status";
+      gap:11px;padding:13px;border:1px solid #dbe7ea;border-radius:21px;background:rgba(247,250,251,.9);box-shadow:inset 0 1px 0 #fff,0 12px 34px rgba(25,55,72,.055)}
+    #page-home .run-btn{grid-area:run;position:relative;overflow:hidden;min-height:152px;padding:25px 27px;border:1px solid rgba(31,73,91,.34);background:linear-gradient(135deg,#163a53 0%,#205268 56%,#2c716f 128%);box-shadow:0 15px 30px rgba(18,55,77,.2);font-size:15px;letter-spacing:.02em}
+    #page-home .run-btn:before{content:"";position:absolute;right:-38px;top:-54px;width:170px;height:170px;border:1px solid rgba(255,255,255,.13);border-radius:50%;box-shadow:0 0 0 27px rgba(255,255,255,.035)}
+    #page-home .run-btn:after{content:"教学数据主同步";position:absolute;left:27px;top:24px;color:#96d4ca;font:800 10px inherit;letter-spacing:.16em}
+    #page-home .run-btn small{margin-top:34px;color:rgba(238,249,248,.76);font-weight:600}
+    #page-home .run-btn:hover{transform:translateY(-2px);box-shadow:0 18px 36px rgba(18,55,77,.26);filter:none}
+    #page-home .secondary-actions{grid-area:secondary;grid-template-columns:minmax(190px,.78fr) minmax(300px,1.22fr);gap:11px}
+    #page-home .renewal-action,#page-home .service-action{border:1px solid #d5e2e6;border-radius:15px;background:linear-gradient(155deg,#fff,#f4f8f9);box-shadow:0 7px 17px rgba(22,52,68,.045)}
+    #page-home .renewal-action{padding:11px}
+    #page-home .scholarship-btn{border-color:transparent;background:#eaf2f5;color:#1b445a}
+    #page-home .renewal-month-field{border-color:#d9e5e8;background:#fff}
+    #page-home .service-action{padding:11px;background:linear-gradient(155deg,#fbfefd,#eef8f5)}
+    #page-home .service-filter-title span{color:#24534e}
+    #page-home .service-day-picks b{border-color:#cddfe0;background:#fff;color:#637b85}
+    #page-home .service-day-picks input:checked+b{border-color:#278e80;background:#e3f4ef;color:#0b6d5f;box-shadow:inset 0 0 0 1px rgba(39,142,128,.08)}
+    #page-home .service-time-fields label{border-color:#d2e1e3;background:#fff}
+    #page-home .service-btn{border-color:#abd2c8;background:#e5f4ef;color:#126e60}
+    #page-home .view-btn{grid-area:view;border:1px solid #173d56;background:linear-gradient(135deg,#173d56,#214f68);box-shadow:0 10px 22px rgba(19,57,79,.13);letter-spacing:.025em}
+    #page-home .view-btn:hover{transform:translateY(-1px);box-shadow:0 13px 27px rgba(19,57,79,.19)}
+    #page-home .schedule-btn{grid-area:schedule;border:1px solid #b9d8d1;background:linear-gradient(145deg,#edf8f5,#e1f2ed);color:#176f62}
+    #page-home .schedule-btn small{color:#5d8179}
+    #page-home .scholarship-status{grid-area:renewal-status}
+    #page-home .service-status{grid-area:service-status}
+    #page-home .scholarship-status,#page-home .service-status{min-height:34px;display:flex;align-items:center;padding:9px 13px;border-radius:10px;line-height:1.45}
+    #page-home .scholarship-status{border-color:#cbdde3;background:#edf4f6;color:#476b7c}
+    #page-home .service-status{border-color:#c3ddd6;background:#edf8f5;color:#3e7168}
+
+    #page-home .right-stack{gap:13px}
+    #page-home .status-card{position:relative;overflow:hidden;padding:19px;background:linear-gradient(145deg,#fff,#fbfdfd)}
+    #page-home .status-card:before{content:"";position:absolute;left:0;top:0;width:5px;height:100%;background:linear-gradient(#1f766d,#66a79d)}
+    #page-home .card-title h2{color:#18374b;letter-spacing:-.02em}
+    #page-home .pill{border:1px solid #c9e5de;background:#e8f6f2;color:#147164;letter-spacing:.045em}
+    #page-home .status-message{position:relative;padding:15px 16px 15px 19px;border:1px solid #cfe5df;border-radius:13px;background:linear-gradient(145deg,#edf8f5,#e3f3ee);color:#2c7066;line-height:1.62;box-shadow:inset 4px 0 0 #3c9487}
+    #page-home .status-message.error{border-color:#efcfca;background:linear-gradient(145deg,#fff3f0,#fbe9e6);color:#a1473d;box-shadow:inset 4px 0 0 #c9685e}
+    #page-home .dataset-card{background:linear-gradient(155deg,#fff,#f8fbfc)}
+    #page-home .dataset-item{border-color:#dce7ea;background:#f5f8f9;transition:transform .16s ease,border-color .16s ease,background .16s ease}
+    #page-home .dataset-item:hover{transform:translateX(3px);border-color:#b9d1d8;background:#fff}
+    #page-home .links-card{gap:9px;background:rgba(255,255,255,.88)}
+    #page-home .links-card .ghost{border-color:#d5e2e6;background:#fbfdfd;color:#23485d}
+    #page-home .links-card .ghost:hover{border-color:#9ebec6;background:#f0f7f7}
+
+    @media(min-width:1081px) and (max-width:1499px){
+      #page-home .primary-actions{grid-template-columns:1fr 1fr;grid-template-areas:"run run" "secondary secondary" "view schedule" "renewal-status service-status"}
+      #page-home .run-btn{min-height:110px}
+      #page-home .run-btn small{margin-top:28px}
+    }
+    @media(max-width:1080px){
+      #page-home .primary-actions{grid-template-columns:1fr;grid-template-areas:"run" "secondary" "view" "schedule" "renewal-status" "service-status"}
+      #page-home .secondary-actions{grid-template-columns:1fr 1fr}
+      #page-home .run-btn{min-height:106px}
+    }
+    @media(max-width:680px){#page-home .secondary-actions{grid-template-columns:1fr}}
     </style>
 </head>
 <body>
