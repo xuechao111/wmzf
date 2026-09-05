@@ -472,7 +472,7 @@ async function fetchServiceInCurrentChrome(){
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
-            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>Number(normalize(b.slice_name||b.chart_name||b.name).includes("明细"))-Number(normalize(a.slice_name||a.chart_name||a.name).includes("明细")));
+            const named=charts.filter(chart=>{const name=normalize(chart.slice_name||chart.chart_name||chart.name);const dimensionMatch=dimension==="老师"?((name.includes("老师")||name.includes("教师"))&&!name.includes("团队")&&!name.includes("小组")&&!name.includes("战区")&&!name.includes("用户")):(name.includes("-小组")||name.includes("小组数据"));return dimensionMatch&&!name.includes("趋势");}).sort((a,b)=>Number(normalize(a.slice_name||a.chart_name||a.name).includes("明细"))-Number(normalize(b.slice_name||b.chart_name||b.name).includes("明细")));
             // The verified dashboards expose stable, descriptive chart names.
             // Use those candidates directly; scanning every chart definition
             // multiplied Superset requests and could leave the UI waiting.
@@ -506,40 +506,38 @@ async function fetchServiceInCurrentChrome(){
             if(!raw||!Array.isArray(raw.data))throw new Error(`CRM_SERVICE_TABLE_INVALID:${id}:${dimension}`);
             if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${filterDates.join(",")}`);
             const verbose=raw.verbose_map||{},physical=(raw.colnames||Object.keys(raw.data[0]||{})).map(normalize);
+            const label=column=>normalize(verbose[column]||column),findColumn=(aliases,exclude=[])=>physical.find(column=>{const value=`${column} ${label(column)}`.toLowerCase();return aliases.some(alias=>value.includes(alias.toLowerCase()))&&!exclude.some(alias=>value.includes(alias.toLowerCase()));})||"";
             const wanted=kind==="im"
               ? ["worker_no","beisen_user_fullname","level_7_department_name","send_date","msg_send_hour","pre_teacher_3m_reply_cnt"]
               : ["worker_no","beisen_user_fullname","level_7_department_name","statistics_date","stat_date","avg_2hour_reply_rate"];
-            if(!physical.includes(kind==="im"?"pre_teacher_3m_reply_cnt":"avg_2hour_reply_rate"))throw new Error(`CRM_SERVICE_METRIC_NOT_FOUND:${id}:${dimension}:${physical.join("|")}`);
+            const metricColumn=findColumn(kind==="im"?["pre_teacher_3m_reply_cnt","3分钟回复率"]:["avg_2hour_reply_rate","2小时回复率","2h回复率"]);
+            if(!metricColumn)throw new Error(`CRM_SERVICE_METRIC_NOT_FOUND:${id}:${dimension}:${physical.map(column=>`${column}=${label(column)}`).join("|")}`);
             if(dimension==="老师"&&!physical.some(column=>column==="worker_no"||column==="beisen_user_fullname"))throw new Error(`CRM_SERVICE_TEACHER_COLUMNS_NOT_FOUND:${id}:${physical.join("|")}`);
             if(dimension==="小组"&&!physical.includes("level_7_department_name"))throw new Error(`CRM_SERVICE_GROUP_COLUMN_NOT_FOUND:${id}:${physical.join("|")}`);
             const selected=physical.filter(column=>wanted.includes(column));
             const resultHeaders=selected.length?selected:physical;
-            const metricColumn=kind==="im"?"pre_teacher_3m_reply_cnt":"avg_2hour_reply_rate";
             const percent=value=>{const text=normalize(value);if(!text)return null;const number=Number(text.replace("%",""));if(!Number.isFinite(number))return null;return text.includes("%")?number:(Math.abs(number)<=1?number*100:number);};
+            const number=value=>{const parsed=Number(normalize(value).replace(/,/g,""));return Number.isFinite(parsed)?parsed:null;};
+            const countColumns=kind==="im"?{
+              imQuestions:findColumn(["学生消息数"]),imAnswered:findColumn(["3分钟消息回复数"]),imUsers:findColumn(["发送信息学员人数"]),imEligible:findColumn(["有IM且到课学员量"]),imUsage:findColumn(["学生IM使用率"]),callUsers:findColumn(["通话人数"],["视频"]),callCoverage:findColumn(["通话覆盖率"],["视频"]),voiceDialCount:findColumn(["语音拨打次数"]),voiceCallRate:findColumn(["语音通话率"],["接通","使用"]),voiceConnectRate:findColumn(["语音通话接通率"]),voiceUsageRate:findColumn(["语音通话使用率"]),videoCallUsers:findColumn(["视频通话人数"]),videoCallCoverage:findColumn(["视频通话覆盖率"]),videoDialCount:findColumn(["视频拨打次数"]),videoCallRate:findColumn(["视频通话率"],["接通","使用","覆盖"]),videoConnectRate:findColumn(["视频接通率"]),videoUsageRate:findColumn(["视频通话使用率"]),videoAverageMinutes:findColumn(["视频平均通话时长"])
+            }:{};
             const grouped=new Map();
             for(const sourceRow of raw.data){
               const name=normalize(sourceRow.beisen_user_fullname),worker=normalize(sourceRow.worker_no),group=normalize(sourceRow.level_7_department_name);
               const key=dimension==="老师"?(worker||name):group,value=percent(sourceRow[metricColumn]);
-              if(!key||value==null)continue;
-              if(!grouped.has(key))grouped.set(key,{worker_no:worker,beisen_user_fullname:name,level_7_department_name:group,sum:0,count:0});
-              const item=grouped.get(key);item.sum+=value;item.count+=1;
+              if(!key||(value==null&&kind!=="im"))continue;
+              if(!grouped.has(key))grouped.set(key,{worker_no:worker,beisen_user_fullname:name,level_7_department_name:group,rates:[],counts:{},percentages:{}});
+              const item=grouped.get(key);if(value!=null)item.rates.push(value);
+              for(const [field,column] of Object.entries(countColumns)){if(!column)continue;const isRate=field.endsWith("Rate")||field.endsWith("Coverage")||field==="imUsage";if(isRate){const parsed=percent(sourceRow[column]);if(parsed!=null)(item.percentages[field]??=[]).push(parsed);}else{const parsed=number(sourceRow[column]);if(parsed!=null)item.counts[field]=(item.counts[field]||0)+parsed;}}
             }
-            const granular=raw.data.length>grouped.size;
             const rows=[...grouped.values()].map(item=>{
-              const base={worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[metricColumn]:`${item.sum/item.count}%`};
-              // A detail table returns one valid question record per source row;
-              // its metric is the within-threshold answer flag (IM 3m / WeCom 2h).
-              // Only publish counts when the result is actually granular; this
-              // prevents an already-aggregated group chart from inventing counts.
-              if(granular){
-                const questionKey=kind==="im"?"im_question_count":"wecom_question_count",answerKey=kind==="im"?"im_answered_3m_count":"wecom_answered_2h_count";
-                base[questionKey]=item.count;base[answerKey]=Math.round(item.sum/100);base[metricColumn]=`${base[questionKey]?base[answerKey]/base[questionKey]*100:0}%`;
-              }
+              const base={worker_no:item.worker_no,beisen_user_fullname:item.beisen_user_fullname,level_7_department_name:item.level_7_department_name,[kind==="im"?"pre_teacher_3m_reply_cnt":"avg_2hour_reply_rate"]:item.rates.length?`${item.rates.reduce((sum,x)=>sum+x,0)/item.rates.length}%`:null};
+              if(kind==="im"){const c=item.counts,p=item.percentages;base.im_question_count=c.imQuestions??null;base.im_answered_3m_count=c.imAnswered??null;base.im_user_count=c.imUsers??null;base.im_eligible_student_count=c.imEligible??null;base.im_usage_rate=c.imEligible?c.imUsers/c.imEligible*100:(p.imUsage?.[0]??null);for(const field of ["callUsers","voiceDialCount","videoCallUsers","videoDialCount"]){if(c[field]!=null)base[field]=c[field];}for(const field of ["callCoverage","voiceCallRate","voiceConnectRate","voiceUsageRate","videoCallCoverage","videoCallRate","videoConnectRate","videoUsageRate","videoAverageMinutes"]){if(p[field]?.length)base[field]=p[field].reduce((sum,x)=>sum+x,0)/p[field].length;}}
               return base;
             });
             if(!rows.length)throw new Error(`CRM_SERVICE_EMPTY_AFTER_FILTERS:${id}:${dimension}:${chart.slice_name||chart.chart_name||""}`);
-            const countHeaders=!granular?[]:(kind==="im"?["im_answered_3m_count","im_question_count"]:["wecom_answered_2h_count","wecom_question_count"]);
-            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:[...resultHeaders,...countHeaders],rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns,granular};
+            const countHeaders=kind==="im"?["pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceCallRate","voiceConnectRate","voiceUsageRate","videoCallUsers","videoCallCoverage","videoDialCount","videoCallRate","videoConnectRate","videoUsageRate","videoAverageMinutes"]:["avg_2hour_reply_rate"];
+            return {chartId:chart.id||chart.slice_id,chartName:chart.slice_name||chart.chart_name||"",headers:[...resultHeaders,...countHeaders],rows,rowcount:Number(raw.rowcount??rows.length),filterColumns:columns,granular:false,aggregation:"summary-chart"};
           };
           const fetchDimension=async(dimension,filterDates)=>{const candidates=await pick(dimension),attempts=[];for(const chart of candidates){try{const table=await runChart(chart,dimension,filterDates);if(table.rows.length)return table;}catch(error){attempts.push(`${chart.id||chart.slice_id}:${normalize(chart.slice_name||chart.chart_name||chart.name)}=>${String(error?.message||error)}`);}}throw new Error(attempts.length?`CRM_SERVICE_CANDIDATES_FAILED:${id}:${dimension}:${attempts.join(" || ")}`:`CRM_SERVICE_CHART_NOT_FOUND:${id}:${dimension}`);};
           const fetchRange=async filterDates=>{const [teacher,group]=await Promise.all([fetchDimension("老师",filterDates),fetchDimension("小组",filterDates)]);return {teacher,group};};
@@ -775,7 +773,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-people-metrics-20"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-summary-metrics-21"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}

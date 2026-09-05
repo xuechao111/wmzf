@@ -1,0 +1,27 @@
+import assert from "node:assert/strict";
+import {buildServiceViews} from "../sync-service-data.mjs";
+
+const imHeaders=["worker_no","beisen_user_fullname","level_7_department_name","pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceConnectRate","videoCallUsers","videoCallCoverage","videoDialCount","videoConnectRate"];
+const imRow={worker_no:"C18806",beisen_user_fullname:"阳鹏",level_7_department_name:"屹柯组",pre_teacher_3m_reply_cnt:"97.90%",im_answered_3m_count:48,im_question_count:49,im_user_count:14,im_eligible_student_count:36,im_usage_rate:38.9,callUsers:2,callCoverage:5.56,voiceDialCount:7,voiceConnectRate:42.86,videoCallUsers:1,videoCallCoverage:2.86,videoDialCount:1,videoConnectRate:0};
+const source={im:{teacher:{headers:imHeaders,rows:[imRow]},group:{headers:imHeaders,rows:[{...imRow,worker_no:"",beisen_user_fullname:"",level_7_department_name:"屹柯组"}]}},wecom:{teacher:{headers:["worker_no","beisen_user_fullname","level_7_department_name","avg_2hour_reply_rate"],rows:[{worker_no:"C18806",beisen_user_fullname:"阳鹏",level_7_department_name:"屹柯组",avg_2hour_reply_rate:"95%"}]},group:{headers:["level_7_department_name","avg_2hour_reply_rate"],rows:[{level_7_department_name:"屹柯组",avg_2hour_reply_rate:"95%"}]}}};
+const result=buildServiceViews(source),teacher=result.teachers[0],group=result.groups[0];
+assert.equal(teacher.imAnswered,48);
+assert.equal(teacher.imQuestions,49);
+assert.equal(teacher.im,48/49*100);
+assert.equal(teacher.imUsers,14);
+assert.equal(teacher.imEligibleStudents,36);
+assert.equal(teacher.imUsage,14/36*100);
+assert.equal(teacher.callUsers,2);
+assert.equal(teacher.voiceDialCount,7);
+assert.equal(teacher.videoCallUsers,1);
+assert.equal(teacher.videoDialCount,1);
+assert.equal(teacher.wecom,95);
+assert.equal(group.imAnswered,48);
+assert.equal(group.imQuestions,49);
+assert.equal(group.imUsers,14);
+assert.equal(group.imEligibleStudents,36);
+assert.equal(group.callUsers,2);
+assert.equal(group.voiceDialCount,7);
+assert.equal(group.videoCallUsers,1);
+assert.equal(group.videoDialCount,1);
+console.log("SERVICE_METRICS_OK");
