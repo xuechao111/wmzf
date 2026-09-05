@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {buildServiceViews} from "../sync-service-data.mjs";
+import {buildServiceViews,validateServiceSummaryTables} from "../sync-service-data.mjs";
 
 const imHeaders=["worker_no","beisen_user_fullname","level_7_department_name","pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceConnectRate","videoCallUsers","videoCallCoverage","videoDialCount","videoConnectRate"];
 const imRow={worker_no:"C18806",beisen_user_fullname:"阳鹏",level_7_department_name:"屹柯组",pre_teacher_3m_reply_cnt:"97.90%",im_answered_3m_count:48,im_question_count:49,im_user_count:14,im_eligible_student_count:36,im_usage_rate:38.9,callUsers:2,callCoverage:5.56,voiceDialCount:7,voiceConnectRate:42.86,videoCallUsers:1,videoCallCoverage:2.86,videoDialCount:1,videoConnectRate:0};
@@ -24,4 +24,8 @@ assert.equal(group.callUsers,2);
 assert.equal(group.voiceDialCount,7);
 assert.equal(group.videoCallUsers,1);
 assert.equal(group.videoDialCount,1);
+const aggregatedDetail={...source,im:{teacher:{...source.im.teacher,chartName:"课中数据回复率-明细数据-老师",granular:false,aggregation:"summary-chart"},group:{...source.im.group,chartName:"课中数据回复率-小组数据（聚合）",granular:false,aggregation:"summary-chart"}}};
+assert.doesNotThrow(()=>validateServiceSummaryTables(aggregatedDetail));
+assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggregatedDetail.im,teacher:{...aggregatedDetail.im.teacher,granular:true,aggregation:"detail"}}}),/CRM_SERVICE_SUMMARY_REQUIRED/);
+assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggregatedDetail.im,teacher:{...aggregatedDetail.im.teacher,rows:[{...imRow,im_answered_3m_count:50,im_question_count:49}]}}}),/CRM_SERVICE_SUMMARY_COUNTS_INVALID/);
 console.log("SERVICE_METRICS_OK");
