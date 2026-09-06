@@ -98,7 +98,15 @@ try {
             else { throw ($_.Exception.Message + ' 请将最新版 ZIP 重命名为“工作台离线更新包.zip”，放到工作台目录后再次点击更新。') }
         }
     }
-    Write-UpdateStatus 'success' '工作台已更新到最新版本。' "$method；正在重启本地服务。"
+    Write-UpdateStatus 'running' '程序文件已更新，正在自动核对运行环境…' "$method；已有个人配置和数据保持不变。"
+    $setup = Join-Path $InstallRoot 'setup-workbench.ps1'
+    if (-not (Test-Path -LiteralPath $setup)) { throw '更新包缺少一键环境配置脚本。' }
+    $setupOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -RuntimeOnly 2>&1 | ForEach-Object { [string]$_ })
+    if ($LASTEXITCODE -ne 0) {
+        $setupDetail = ($setupOutput | Where-Object { $_ } | Select-Object -Last 3) -join '；'
+        throw ('运行环境自动配置未完成。' + $setupDetail)
+    }
+    Write-UpdateStatus 'success' '工作台及运行环境均已更新完成。' "$method；配置、连接信息和已有数据已保留；正在重启本地服务。"
     $restart = Join-Path $InstallRoot 'restart-dashboard.ps1'
     if (Test-Path -LiteralPath $restart) {
         $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $restart + '"'),'-InstallRoot',('"' + $InstallRoot + '"'),'-RuntimeRoot',('"' + $RuntimeRoot + '"'),'-Port',[string]$Port)
