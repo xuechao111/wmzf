@@ -292,6 +292,53 @@
     #page-home .sidebar-links{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:11px;background:rgba(255,255,255,.94)}
     #page-home .sidebar-links .ghost{min-width:0;padding:12px 7px;border-color:#d9e5e5;background:#f9fbfb;color:#253b40;font-size:11px}
     #page-home .sidebar-links .ghost:hover{transform:translateY(-1px);border-color:#91cec9;background:#eef9f8;color:#087d79}
+
+    /* Teaching-service workspace: three focused boards, one data source. */
+    #page-service{background:linear-gradient(145deg,#f7f9fa,#edf2f3)}
+    #page-service .service-board{gap:12px;max-width:1880px;margin:0 auto;padding:22px 24px 34px}
+    #page-service .data-head{padding:2px 2px 4px}
+    #page-service .data-head h2{color:#12282e;letter-spacing:-.035em}
+    #page-service .data-head p{margin-top:6px;color:#708187}
+    #page-service .small-btn.red{border-color:#143c43;background:#143c43;box-shadow:0 8px 20px rgba(20,60,67,.16)}
+    #page-service .service-standard{gap:9px;padding:10px;border:1px solid #dce6e6;border-left:0;border-radius:15px;background:#fff;box-shadow:0 8px 22px rgba(18,44,50,.04)}
+    #page-service .service-standard strong{padding:8px 11px;border-radius:9px;background:#12282e;color:#fff;font-size:11px;letter-spacing:.04em}
+    #page-service .service-standard span{padding:7px 10px;border-radius:8px;background:#f3f7f7;color:#5e7479;font-size:11px}
+    .service-view-shell{display:grid;gap:12px;min-height:0}
+    .service-view-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:7px;border:1px solid #dce6e6;border-radius:16px;background:#eaf0f1}
+    .service-view-tab{display:flex;align-items:center;justify-content:center;gap:10px;min-height:52px;border:0;border-radius:11px;background:transparent;color:#61767b;cursor:pointer;font:900 13px inherit;transition:.18s ease}
+    .service-view-tab b{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:rgba(255,255,255,.7);color:#789096;font:900 10px "Cascadia Mono",monospace}
+    .service-view-tab:hover{background:rgba(255,255,255,.58);color:#274047}
+    .service-view-tab.active{background:#fff;color:#10292f;box-shadow:0 7px 18px rgba(17,45,51,.09)}
+    .service-view-tab.active b{background:#123c43;color:#8ee6de}
+    .service-view-panel{display:none;gap:12px;min-height:0}
+    .service-view-panel.active{display:grid;animation:servicePanelIn .28s ease both}
+    @keyframes servicePanelIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    .service-panel-intro{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:17px 19px;border:1px solid #dce6e6;border-radius:16px;background:linear-gradient(135deg,#fff,#f4f8f8)}
+    .service-panel-intro>div{display:flex;align-items:center;gap:12px}
+    .service-panel-intro em{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#143c43;color:#8ee6de;font:900 12px "Cascadia Mono",monospace;font-style:normal}
+    .service-panel-intro h3{margin:0;color:#142c32;font-size:18px;letter-spacing:-.02em}
+    .service-panel-intro p{margin:4px 0 0;color:#72868b;font-size:11px}
+    .service-panel-intro>span{padding:7px 10px;border-radius:999px;background:#e7f6f4;color:#167a71;font-size:10px;font-weight:900}
+    #page-service .service-daily,#page-service .service-section{padding:18px;border:1px solid #dce6e6;border-radius:17px;background:#fff;box-shadow:0 12px 28px rgba(18,44,50,.045)}
+    #page-service .service-daily-head{align-items:center;padding-bottom:12px;border-bottom:1px solid #edf1f2}
+    #page-service .service-daily-head h3{color:#17353c;font-size:15px}
+    #page-service .service-daily-head span{padding:6px 9px;border-radius:8px;background:#f2f6f6;color:#6d8186;font-size:10px}
+    #page-service .service-daily-kpis,#page-service .service-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+    #page-service .service-daily-kpis>div,#page-service .service-kpi{position:relative;overflow:hidden;min-height:80px;padding:14px 15px;border:1px solid #e0e8e8;border-radius:13px;background:#f8fafa}
+    #page-service .service-daily-kpis>div:before,#page-service .service-kpi:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:#20a79e}
+    #page-service .service-daily-kpis b,#page-service .service-kpi b{color:#173239;font-size:20px}
+    #page-service .service-daily-kpis span,#page-service .service-kpi span{color:#74868a}
+    #page-service .service-daily-grid{grid-template-columns:1fr;gap:14px}
+    #page-service .service-daily-grid>div{min-width:0;padding-top:3px}
+    #page-service .service-daily-grid h4{color:#29434a;font-size:12px}
+    #page-service .table-wrap{border:1px solid #e2e9e9;border-radius:13px;background:#fff}
+    #page-service .service-table thead th{background:#163b43;color:#eefbfa;border-color:#274c53;font-size:10px;letter-spacing:.02em}
+    #page-service .service-table tbody tr:nth-child(even) td{background:#f8fafa}
+    #page-service .service-table tbody tr:hover td{background:#eff8f7}
+    #page-service .service-table tfoot td{background:#eaf5f3!important;border-top-color:#51aaa2;color:#214940}
+    #page-service .service-rate{color:#087b72}
+    @media(max-width:1100px){#page-service .service-daily-kpis,#page-service .service-kpis{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:720px){#page-service .service-board{padding:14px}.service-view-tabs{grid-template-columns:1fr}.service-panel-intro{align-items:flex-start;flex-direction:column}#page-service .service-daily-kpis,#page-service .service-kpis{grid-template-columns:1fr}}
     </style>
 </head>
 <body>
@@ -342,6 +389,18 @@
   const state={meta:null,name:'',page:1,size:50,q:'',liveCohort:'all',timer:null,updateState:null,updateStatus:null,scholarshipStatus:null,serviceStatus:null,requestId:0,cache:new Map(),dense:false,teachingReady:false,teachingIssue:'',renewalReady:false,serviceReady:false};const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
   const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   function showPage(name){$$('.page').forEach(x=>x.classList.toggle('active',x.id==='page-'+name));$$('.nav-btn').forEach(x=>x.classList.toggle('active',x.dataset.page===name));if(name==='data'&&!state.name){if(state.meta)selectTable('__overview');else loadMeta().then(()=>selectTable('__overview'))}if(name==='service')loadServiceData();if(window.gsap)gsap.from('#page-'+name+'>*',{y:16,opacity:0,duration:.42,ease:'power3.out'})}
+  function setupServiceDashboardViews(){
+    const board=$('.service-board'),standard=$('.service-standard'),daily=$('.service-daily'),kpis=$('.service-kpis'),sections=$$('.service-section');
+    if(!board||!standard||!daily||!kpis||sections.length<2||$('#serviceViewTabs'))return;
+    const shell=document.createElement('div');shell.className='service-view-shell';shell.innerHTML=`<nav id="serviceViewTabs" class="service-view-tabs" aria-label="教学服务看板切换"><button class="service-view-tab active" data-service-view="today" aria-selected="true"><b>01</b><span>当天数据</span></button><button class="service-view-tab" data-service-view="multi" aria-selected="false"><b>02</b><span>多天数据</span></button><button class="service-view-tab" data-service-view="team" aria-selected="false"><b>03</b><span>团队数据</span></button></nav><section class="service-view-panel" data-service-panel="today"><div class="service-panel-intro"><div><em>01</em><div><h3>当天数据</h3><p>查看所选时段内老师与团队的当日服务表现</p></div></div><span>实时关注</span></div></section><section class="service-view-panel" data-service-panel="multi"><div class="service-panel-intro"><div><em>02</em><div><h3>多天数据</h3><p>按当前日期及时间范围汇总屹柯组老师表现</p></div></div><span>趋势汇总</span></div></section><section class="service-view-panel" data-service-panel="team"><div class="service-panel-intro"><div><em>03</em><div><h3>团队数据</h3><p>横向比较 AI C++ 教学部各小组的服务指标</p></div></div><span>团队对比</span></div></section>`;
+    standard.after(shell);
+    const today=shell.querySelector('[data-service-panel="today"]'),multi=shell.querySelector('[data-service-panel="multi"]'),team=shell.querySelector('[data-service-panel="team"]');
+    today.appendChild(daily);multi.append(kpis,sections[0]);team.appendChild(sections[1]);
+    const teamTitle=sections[1].querySelector('h3');if(teamTitle)teamTitle.textContent='团队汇总 · AI C++教学部小组维度';
+    const activate=name=>{const selected=['today','multi','team'].includes(name)?name:'today';$$('[data-service-view]').forEach(button=>{const active=button.dataset.serviceView===selected;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active))});$$('[data-service-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.servicePanel===selected));sessionStorage.setItem('serviceDashboardView',selected)};
+    $$('[data-service-view]').forEach(button=>button.onclick=()=>activate(button.dataset.serviceView));activate(sessionStorage.getItem('serviceDashboardView')||'today');
+  }
+  setupServiceDashboardViews();
   $$('[data-page]').forEach(b=>b.onclick=()=>showPage(b.dataset.page));$('#goData').onclick=()=>showPage('data');
   async function json(url,options={}){const {timeoutMs=12000,...fetchOptions}=options,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);try{const r=await fetch(url,{cache:'no-store',...fetchOptions,signal:controller.signal});if(!r.ok){const text=await r.text();try{throw new Error(JSON.parse(text).message||text)}catch(e){if(e instanceof SyntaxError)throw new Error(text);throw e}}return r.json()}catch(e){if(e.name==='AbortError')throw new Error('本地服务响应超时');throw e}finally{clearTimeout(timer)}}
   function parseClassConfig(text){const rows=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);return rows.map((line,index)=>{const pair=line.split(/[,，\s]+/).filter(Boolean).map(Number);if(pair.length<2||!Number.isInteger(pair[0])||!Number.isInteger(pair[1])||pair[0]<=0||pair[1]<=0)throw new Error(`第 ${index+1} 行班级配置格式不正确`);return pair.slice(0,2)})}
