@@ -112,15 +112,28 @@ async function reconcileUpdateRuntime(localBase=LOCAL_BASE){
   }catch{}
 }
 
-async function waitForTabReady(tabId,timeout=20000){
-  const tab=await chrome.tabs.get(tabId);
-  if(tab.status==="complete"&&!tab.discarded)return tab;
-  return await new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{chrome.tabs.onUpdated.removeListener(listener);reject(new Error("CRM页面加载超时"));},timeout);
-    const listener=(id,change,current)=>{if(id===tabId&&change.status==="complete"){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);resolve(current);}};
-    chrome.tabs.onUpdated.addListener(listener);
-    if(tab.discarded)chrome.tabs.reload(tabId).catch(reject);
-  });
+async function waitForTabReady(tabId,timeout=45000,reloadAttempt=0){
+  const deadline=Date.now()+timeout;
+  let tab=await chrome.tabs.get(tabId);
+  if(tab.discarded)await chrome.tabs.reload(tabId).catch(()=>null);
+  while(Date.now()<deadline){
+    tab=await chrome.tabs.get(tabId);
+    if(tab.status==="complete"&&!tab.discarded)return tab;
+    // Chrome may keep an already usable SPA tab in `loading` while a
+    // background request or restored frame is pending. A successful MAIN
+    // world probe is a stronger readiness signal than tab.status alone.
+    try{
+      const result=await chrome.scripting.executeScript({target:{tabId},world:"MAIN",func:()=>({readyState:document.readyState,href:location.href})});
+      const state=result?.[0]?.result?.readyState;
+      if((state==="interactive"||state==="complete")&&!tab.discarded)return tab;
+    }catch{}
+    await new Promise(resolve=>setTimeout(resolve,750));
+  }
+  if(reloadAttempt<1){
+    await chrome.tabs.reload(tabId).catch(()=>null);
+    return waitForTabReady(tabId,30000,reloadAttempt+1);
+  }
+  throw new Error("CRM页面加载超时：已自动探测并刷新一次，页面仍未就绪");
 }
 
 async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=async()=>{}){
@@ -326,12 +339,12 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
 async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0,localBase=LOCAL_BASE){
   const tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前浏览器打开并登录CRM后台；控制台不会另开页面。"};
-  const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
   try{
-    await waitForTabReady(tab.id);
     // Run API calls in the extension service worker. Host permissions allow
     // authenticated CRM requests without depending on page-frame lifetime or
-    // page CORS, which previously caused intermittent `Failed to fetch`.
+    // page CORS. Do not wait for tab.status here: an already authenticated
+    // CRM SPA may remain `loading` or be discarded while its cookies and the
+    // background API session are fully usable.
     const data=await Promise.race([
       collectCrmData(classes,excludedTeachers,(message,detail)=>postLocalStatus("running",message,detail,"crm",localBase)),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_TOTAL_TIMEOUT")),5*60*1000)),
@@ -797,7 +810,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-detail-fallback-25"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"crm-ready-probe-26"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
