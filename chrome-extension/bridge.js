@@ -4,10 +4,11 @@ if(!globalThis.__codemaoDashboardBridgeInstalled){
   window.addEventListener("message",event=>{
     const message={...event.data,localBase:location.origin};
     if(event.source!==window||message?.source!=="codemao-dashboard"||!message.id)return;
+    if(message.targetConnectorId&&message.targetConnectorId!==chrome.runtime.id)return;
     const relay=(attempt=0)=>chrome.runtime.sendMessage(message,response=>{
       const runtimeError=chrome.runtime.lastError?.message;
       if(runtimeError&&attempt<2){setTimeout(()=>relay(attempt+1),600*(attempt+1));return;}
-      window.postMessage({source:"codemao-crm-extension",id:message.id,...(response||{ok:false,error:runtimeError||"连接器服务暂时不可用，请稍后重试"})},"*");
+      window.postMessage({source:"codemao-crm-extension",id:message.id,connectorId:chrome.runtime.id,connectorVersion:chrome.runtime.getManifest().version,...(response||{ok:false,error:runtimeError||"连接器服务暂时不可用，请稍后重试"})},"*");
     });
     relay();
   });
