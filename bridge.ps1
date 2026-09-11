@@ -48,6 +48,8 @@ if ([string]::IsNullOrWhiteSpace($python)) { throw '未找到可执行的 Python
 $statusFile = Join-Path $root 'status.json'
 $scholarshipStatusFile = Join-Path $root 'scholarship-status.json'
 $scholarshipRunner = Join-Path $sourceRoot 'run-scholarship-update.ps1'
+$nctStatusFile = Join-Path $root 'nct-status.json'
+$nctRunner = Join-Path $sourceRoot 'run-nct-update.ps1'
 $serviceStatusFile = Join-Path $root 'service-status.json'
 $serviceDataFile = Join-Path $root 'service-data.json'
 $serviceRunner = Join-Path $sourceRoot 'run-service-update.ps1'
@@ -112,6 +114,7 @@ function Get-DashboardConfig {
         hasDingtalkAccessKey = $false
         renewalWorkbookUrl = ''
         renewalSheetId = ''
+        nctWorkbookUrl = ''
         serviceWorkbookUrl = ''
         classes = @()
         excludedTeachers = @('薛超')
@@ -125,7 +128,7 @@ function Get-DashboardConfig {
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','serviceWorkbookUrl','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
+            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -154,9 +157,10 @@ function Save-DashboardConfig($bodyText) {
     $workbook = [string]$payload.workbookUrl
     if ($workbook -notmatch '^https://alidocs\.dingtalk\.com/') { throw '钉钉文档链接格式不正确。' }
     $renewalWorkbook = ([string]$payload.renewalWorkbookUrl).Trim()
+    $nctWorkbook = ([string]$payload.nctWorkbookUrl).Trim()
     $serviceWorkbook = ([string]$payload.serviceWorkbookUrl).Trim()
-    foreach ($candidate in @($renewalWorkbook,$serviceWorkbook)) {
-        if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^https://alidocs\.dingtalk\.com/') { throw '续费或教学服务文档链接格式不正确。' }
+    foreach ($candidate in @($renewalWorkbook,$nctWorkbook,$serviceWorkbook)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^https://alidocs\.dingtalk\.com/') { throw '续费、等考招考或教学服务文档链接格式不正确。' }
     }
     $classes = @()
     foreach ($pair in @($payload.classes)) {
@@ -190,6 +194,7 @@ function Save-DashboardConfig($bodyText) {
         portableMode = $portableMode
         renewalWorkbookUrl = $renewalWorkbook
         renewalSheetId = ([string]$payload.renewalSheetId).Trim()
+        nctWorkbookUrl = $nctWorkbook
         serviceWorkbookUrl = $serviceWorkbook
         classes = $classes
         excludedTeachers = @($payload.excludedTeachers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
@@ -297,6 +302,44 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
     Write-ScholarshipStatusObject 'running' '当前 Chrome 数据已接收，正在更新续费表格…' "筛选：$renewalMonth · 首续 · 深圳战区" $startedAt
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$scholarshipRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return '当前 Chrome 数据已接收，续费表格更新已启动。'
+}
+
+function Write-NctStatusObject($state, $message, $detail = '', $startedAt = '') {
+    if ([string]::IsNullOrWhiteSpace([string]$startedAt)) { $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
+    $status = [ordered]@{state=[string]$state;message=[string]$message;detail=[string]$detail;time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt=[string]$startedAt} | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($nctStatusFile,$status,$utf8NoBom)
+}
+
+function Read-NctStatusObject {
+    if (-not (Test-Path -LiteralPath $nctStatusFile)) { return $null }
+    try { return Get-Content -LiteralPath $nctStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+}
+
+function Repair-NctStatus {
+    $status = Read-NctStatusObject
+    if ($null -eq $status -or [string]$status.state -ne 'running') { return }
+    try { $lastChange=[DateTime]::ParseExact([string]$status.time,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture);if(((Get-Date)-$lastChange).TotalMinutes-gt 10){Write-NctStatusObject 'error' 'NCT年卡购买更新已超时' '超过10分钟没有返回结果，任务锁已自动解除。' ([string]$status.startedAt)}} catch {}
+}
+
+function Send-NctStatus($stream) {
+    Repair-NctStatus
+    if (-not (Test-Path -LiteralPath $nctStatusFile)) { Write-NctStatusObject 'idle' '尚未更新NCT年卡购买数据' '请先配置等考招考文档，并选择筛选条件。' }
+    Send-File $stream $nctStatusFile 'application/json; charset=utf-8'
+}
+
+function Invoke-NctExtensionUpdate($bodyText) {
+    Repair-NctStatus
+    $current=Read-NctStatusObject
+    if($null-ne$current-and[string]$current.state-eq'running'){throw 'NCT年卡购买数据正在更新，请等待本轮完成。'}
+    if(-not(Test-Path -LiteralPath $nctRunner)){throw '本地NCT年卡更新运行器不存在。'}
+    $payload=$bodyText|ConvertFrom-Json;$bytes=[Convert]::FromBase64String([string]$payload.data);$parsed=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json
+    if($null-eq$parsed-or$null-eq$parsed.headers-or$null-eq$parsed.rows-or@($parsed.rows).Count-eq0){throw '当前Chrome CRM页面返回了空数据。'}
+    $filters=$payload.filters
+    if([string]$parsed.filters.startDate-ne[string]$filters.startDate-or[string]$parsed.filters.endDate-ne[string]$filters.endDate-or[string]$parsed.filters.orderStatus-ne[string]$filters.orderStatus-or[string]$parsed.filters.productName-ne[string]$filters.productName){throw 'NCT筛选条件校验不一致，已停止写入。'}
+    $sourceFile=Join-Path $root 'nct-table-source.json';[IO.File]::WriteAllBytes($sourceFile,$bytes);$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-NctStatusObject 'running' '当前Chrome订单数据已接收，正在写入年卡招考数据…' "支付时间 $($filters.startDate) 至 $($filters.endDate) · $($filters.orderStatus) · $($filters.productName)" $startedAt
+    Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$nctRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
+    return 'NCT年卡订单已接收，写入任务已启动。'
 }
 
 function Invoke-ServiceExtensionUpdate($bodyText) {
@@ -610,6 +653,9 @@ if (-not (Test-Path -LiteralPath $statusFile)) {
 if (-not (Test-Path -LiteralPath $scholarshipStatusFile)) {
     Write-ScholarshipStatusObject 'idle' '尚未配置或更新续费表格数据。' '请在配置面板填写专用续费工作簿和子表 ID。'
 }
+if (-not (Test-Path -LiteralPath $nctStatusFile)) {
+    Write-NctStatusObject 'idle' '尚未更新NCT年卡购买数据。' '请在配置面板填写等考招考文档链接。'
+}
 if (-not (Test-Path -LiteralPath $serviceStatusFile)) {
     $serviceInitial = [ordered]@{state='idle';message='尚未更新教学服务数据。';detail='完成配置后可从当前 Chrome 页面更新。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt='';lastSuccessTime=''} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($serviceStatusFile,$serviceInitial,$utf8NoBom)
@@ -695,6 +741,7 @@ while ($true) {
             '/run' { Send-Json $stream (Invoke-LegacyUpdate) }
             '/status' { Repair-StaleStatus; Send-File $stream $statusFile 'application/json; charset=utf-8' }
             '/scholarship-status' { Send-ScholarshipStatus $stream }
+            '/nct-status' { Send-NctStatus $stream }
             '/service-status' { Repair-ServiceStatus; Send-File $stream $serviceStatusFile 'application/json; charset=utf-8' }
             '/service-data' { Send-File $stream $serviceDataFile 'application/json; charset=utf-8' }
             '/self-update-status' {
@@ -720,6 +767,10 @@ while ($true) {
             '/scholarship-extension-data' {
                 if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交当前 Chrome 数据。' '405 Method Not Allowed' }
                 else { try { Send-Json $stream (Invoke-ScholarshipExtensionUpdate $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
+            }
+            '/nct-extension-data' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交当前 Chrome 的NCT订单数据。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Invoke-NctExtensionUpdate $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
             }
             '/service-extension-data' {
                 if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交当前Chrome数据。' '405 Method Not Allowed' }

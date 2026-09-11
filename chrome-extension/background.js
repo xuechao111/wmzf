@@ -416,6 +416,44 @@ async function fetchRenewalInCurrentChrome(renewalMonth){
   }
 }
 
+async function fetchNctInCurrentChrome(filters={}){
+  const startDate=String(filters.startDate||""),endDate=String(filters.endDate||""),orderStatus=String(filters.orderStatus||"已完成"),productName=String(filters.productName||"").trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||startDate>endDate)return {ok:false,error:"NCT支付时间范围无效。"};
+  if(!productName)return {ok:false,error:"NCT商品名称不能为空。"};
+  const tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
+  if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录CRM订单列表。"};
+  const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
+  try{
+    await waitForTabReady(tab.id);
+    const results=await chrome.scripting.executeScript({
+      target:{tabId:tab.id},world:"MAIN",args:[{startDate,endDate,orderStatus,productName}],
+      func:async selection=>{
+        if(!location.href.startsWith("https://codecamp-crm.codemao.cn/"))throw new Error("CRM_LOGIN_EXPIRED");
+        const base="https://codecamp-marketing.codemao.cn",headers={"content-type":"application/json","systemType":"1"};
+        const request=async(path,body)=>{const response=await fetch(base+path,{method:"POST",credentials:"include",headers,body:JSON.stringify(body)});if(response.status===401||response.status===403||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`NCT_CRM_HTTP_${response.status}:${path}`);const payload=await response.json();if(payload?.success===false)throw new Error(`NCT_CRM_API:${payload.msg||path}`);return payload};
+        const parameterPayload=await request("/system/params",["bk_unified_order_status"]);
+        const parameterRows=Array.isArray(parameterPayload?.data)?parameterPayload.data:(Array.isArray(parameterPayload)?parameterPayload:[]);
+        const statusGroup=parameterRows.find(item=>item?.paramType==="bk_unified_order_status");
+        const statusOption=(statusGroup?.systemParams||[]).find(item=>String(item?.name||item?.label)===selection.orderStatus);
+        if(selection.orderStatus!=="全部"&&!statusOption)throw new Error(`NCT_ORDER_STATUS_NOT_FOUND:${selection.orderStatus}`);
+        const localEpoch=(date,end=false)=>Math.floor(new Date(`${date}T${end?"23:59:59":"00:00:00"}+08:00`).getTime()/1000).toString();
+        const query={page:1,limit:200000,paidAtFrom:localEpoch(selection.startDate),paidAtTo:localEpoch(selection.endDate,true),spuName:selection.productName};
+        if(selection.orderStatus!=="全部")query.orderStatuss=[statusOption.value];
+        const listPayload=await request("/unified-order/list",{...query,limit:1});
+        const listData=listPayload?.data||listPayload,total=Number(listData?.total??listData?.count??0);
+        const exportPayload=await request("/unified-order/list-export",query);
+        const rows=Array.isArray(exportPayload?.data)?exportPayload.data:(Array.isArray(exportPayload)?exportPayload:[]);
+        if(!rows.length)throw new Error("NCT_CRM_SOURCE_EMPTY");
+        if(total&&rows.length!==total)throw new Error(`NCT_CRM_DATA_TRUNCATED:${rows.length}/${total}`);
+        const columns=[...new Set(rows.flatMap(row=>Object.keys(row||{})))];
+        return JSON.stringify({headers:columns,rows,rowcount:total||rows.length,filters:selection});
+      }
+    });
+    const data=results[0]?.result;if(!data)return {ok:false,error:"当前Chrome CRM订单页没有返回NCT年卡数据。"};
+    return {ok:true,data,tabId:tab.id,filters};
+  }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的CRM登录已失效，请在订单列表页重新登录后重试。":`NCT年卡CRM读取失败：${text}`};}
+}
+
 function normalizeServiceSelection(value={}){
   const days=Array.isArray(value.days)?[...new Set(value.days.map(Number).filter(day=>Number.isInteger(day)&&day>=0&&day<=6))]:[];
   const startHour=Number(value.startHour),endHour=Number(value.endHour),safeStart=Number.isInteger(startHour)&&startHour>=0&&startHour<=23?startHour:14,safeEnd=Number.isInteger(endHour)&&endHour>=safeStart&&endHour<=23?endHour:Math.max(safeStart,21);
@@ -794,10 +832,11 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"service-detail-fallback-25"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"nct-annual-card-26"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
+  if(message.type==="fetch-nct"){fetchNctInCurrentChrome(message.filters||{}).then(sendResponse);return true;}
   if(message.type==="fetch-service"){
     fetchServiceInCurrentChrome(message.serviceSelection)
       .then(result=>sendResponse(result||{ok:false,error:"教学服务采集没有返回结果，请重试。"}))
