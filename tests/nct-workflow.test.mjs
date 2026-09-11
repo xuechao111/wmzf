@@ -19,6 +19,7 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(html, /\/nct-extension-data/);
   assert.match(bridge, /'\/nct-status'/);
   assert.match(bridge, /'\/nct-extension-data'/);
+  assert.match(bridge, /NCT年卡购买更新已配置/);
   assert.match(background, /paidAtFrom/);
   assert.match(background, /paidAtTo/);
   assert.match(background, /orderStatuss/);

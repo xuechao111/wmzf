@@ -324,6 +324,16 @@ function Repair-NctStatus {
 function Send-NctStatus($stream) {
     Repair-NctStatus
     if (-not (Test-Path -LiteralPath $nctStatusFile)) { Write-NctStatusObject 'idle' '尚未更新NCT年卡购买数据' '请先配置等考招考文档，并选择筛选条件。' }
+    $status = Read-NctStatusObject
+    if ($null -ne $status -and [string]$status.state -eq 'idle') {
+        $config = Get-DashboardConfig
+        $configured = -not [string]::IsNullOrWhiteSpace([string]$config.nctWorkbookUrl)
+        if ($configured -and ([string]$status.message -ne 'NCT年卡购买更新已配置' -or [string]$status.detail -match '配置')) {
+            Write-NctStatusObject 'idle' 'NCT年卡购买更新已配置' '请选择支付时间、订单状态和商品名称后点击更新。'
+        } elseif (-not $configured -and [string]$status.detail -notmatch '配置') {
+            Write-NctStatusObject 'idle' '尚未更新NCT年卡购买数据' '请先在配置面板填写等考招考文档链接。'
+        }
+    }
     Send-File $stream $nctStatusFile 'application/json; charset=utf-8'
 }
 
