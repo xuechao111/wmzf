@@ -304,9 +304,9 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
     return '当前 Chrome 数据已接收，续费表格更新已启动。'
 }
 
-function Write-NctStatusObject($state, $message, $detail = '', $startedAt = '') {
+function Write-NctStatusObject($state, $message, $detail = '', $startedAt = '', $phase = '') {
     if ([string]::IsNullOrWhiteSpace([string]$startedAt)) { $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
-    $status = [ordered]@{state=[string]$state;message=[string]$message;detail=[string]$detail;time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt=[string]$startedAt} | ConvertTo-Json -Compress
+    $status = [ordered]@{state=[string]$state;phase=[string]$phase;message=[string]$message;detail=[string]$detail;time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt=[string]$startedAt} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($nctStatusFile,$status,$utf8NoBom)
 }
 
@@ -340,16 +340,26 @@ function Send-NctStatus($stream) {
 function Invoke-NctExtensionUpdate($bodyText) {
     Repair-NctStatus
     $current=Read-NctStatusObject
-    if($null-ne$current-and[string]$current.state-eq'running'){throw 'NCT年卡购买数据正在更新，请等待本轮完成。'}
+    if($null-ne$current-and[string]$current.state-eq'running'-and[string]$current.phase-ne'client'){throw 'NCT年卡购买数据正在更新，请等待本轮完成。'}
     if(-not(Test-Path -LiteralPath $nctRunner)){throw '本地NCT年卡更新运行器不存在。'}
     $payload=$bodyText|ConvertFrom-Json;$bytes=[Convert]::FromBase64String([string]$payload.data);$parsed=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json
     if($null-eq$parsed-or$null-eq$parsed.headers-or$null-eq$parsed.rows-or@($parsed.rows).Count-eq0){throw '当前Chrome CRM页面返回了空数据。'}
     $filters=$payload.filters
     if([string]$parsed.filters.startDate-ne[string]$filters.startDate-or[string]$parsed.filters.endDate-ne[string]$filters.endDate-or[string]$parsed.filters.orderStatus-ne[string]$filters.orderStatus-or[string]$parsed.filters.productName-ne[string]$filters.productName){throw 'NCT筛选条件校验不一致，已停止写入。'}
     $sourceFile=Join-Path $root 'nct-table-source.json';[IO.File]::WriteAllBytes($sourceFile,$bytes);$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-NctStatusObject 'running' '当前Chrome订单数据已接收，正在写入年卡招考数据…' "支付时间 $($filters.startDate) 至 $($filters.endDate) · $($filters.orderStatus) · $($filters.productName)" $startedAt
+    Write-NctStatusObject 'running' '当前Chrome订单数据已接收，正在写入年卡招考数据…' "支付时间 $($filters.startDate) 至 $($filters.endDate) · $($filters.orderStatus) · $($filters.productName)" $startedAt 'local'
     Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$nctRunner+'"'),'-InputFile',('"'+$sourceFile+'"') -WindowStyle Hidden
     return 'NCT年卡订单已接收，写入任务已启动。'
+}
+
+function Invoke-NctClientStatus($bodyText) {
+    $payload = $bodyText | ConvertFrom-Json
+    $state = [string]$payload.state
+    if ($state -notin @('running','error')) { throw 'NCT客户端状态无效。' }
+    $message = if ([string]::IsNullOrWhiteSpace([string]$payload.message)) { if ($state -eq 'running') { '正在读取NCT年卡订单…' } else { 'NCT年卡购买更新未启动' } } else { [string]$payload.message }
+    $phase = if ($state -eq 'running') { 'client' } else { 'error' }
+    Write-NctStatusObject $state $message ([string]$payload.detail) ([string]$payload.startedAt) $phase
+    return 'NCT客户端状态已记录。'
 }
 
 function Invoke-ServiceExtensionUpdate($bodyText) {
@@ -781,6 +791,10 @@ while ($true) {
             '/nct-extension-data' {
                 if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交当前 Chrome 的NCT订单数据。' '405 Method Not Allowed' }
                 else { try { Send-Json $stream (Invoke-NctExtensionUpdate $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
+            }
+            '/nct-client-status' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交NCT更新状态。' '405 Method Not Allowed' }
+                else { try { Send-Json $stream (Invoke-NctClientStatus $bodyText) } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' } }
             }
             '/service-extension-data' {
                 if ($method -ne 'POST') { Send-Json $stream '请使用 POST 提交当前Chrome数据。' '405 Method Not Allowed' }

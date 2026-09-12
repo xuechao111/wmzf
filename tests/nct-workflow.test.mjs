@@ -19,6 +19,7 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(html, /\/nct-extension-data/);
   assert.match(bridge, /'\/nct-status'/);
   assert.match(bridge, /'\/nct-extension-data'/);
+  assert.match(bridge, /'\/nct-client-status'/);
   assert.match(bridge, /NCT年卡购买更新已配置/);
   assert.match(background, /paidAtFrom/);
   assert.match(background, /paidAtTo/);
@@ -27,5 +28,8 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.ok(manifest.host_permissions.includes("https://codecamp-marketing.codemao.cn/*"));
   assert.match(sync, /const sheetName="年卡招考数据"/);
   assert.match(sync, /NCT_FILTER_MISMATCH/);
+  assert.match(sync, /normalizeDateTime/);
+  assert.match(sync, /businessLineStr/);
+  assert.match(sync, /NCT_SOURCE_COUNT_MISMATCH/);
   assert.match(sync, /NCT_VERIFY_HEADER_MISMATCH/);
 });

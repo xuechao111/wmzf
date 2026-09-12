@@ -425,31 +425,44 @@ async function fetchNctInCurrentChrome(filters={}){
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
   try{
     await waitForTabReady(tab.id);
-    const results=await chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[{startDate,endDate,orderStatus,productName}],
-      func:async selection=>{
-        if(!location.href.startsWith("https://codecamp-crm.codemao.cn/"))throw new Error("CRM_LOGIN_EXPIRED");
-        const base="https://codecamp-marketing.codemao.cn",headers={"content-type":"application/json","systemType":"1"};
-        const request=async(path,body)=>{const response=await fetch(base+path,{method:"POST",credentials:"include",headers,body:JSON.stringify(body)});if(response.status===401||response.status===403||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`NCT_CRM_HTTP_${response.status}:${path}`);const payload=await response.json();if(payload?.success===false)throw new Error(`NCT_CRM_API:${payload.msg||path}`);return payload};
-        const parameterPayload=await request("/system/params",["bk_unified_order_status"]);
-        const parameterRows=Array.isArray(parameterPayload?.data)?parameterPayload.data:(Array.isArray(parameterPayload)?parameterPayload:[]);
-        const statusGroup=parameterRows.find(item=>item?.paramType==="bk_unified_order_status");
-        const statusOption=(statusGroup?.systemParams||[]).find(item=>String(item?.name||item?.label)===selection.orderStatus);
-        if(selection.orderStatus!=="全部"&&!statusOption)throw new Error(`NCT_ORDER_STATUS_NOT_FOUND:${selection.orderStatus}`);
-        const localEpoch=(date,end=false)=>Math.floor(new Date(`${date}T${end?"23:59:59":"00:00:00"}+08:00`).getTime()/1000).toString();
-        const query={page:1,limit:200000,paidAtFrom:localEpoch(selection.startDate),paidAtTo:localEpoch(selection.endDate,true),spuName:selection.productName};
-        if(selection.orderStatus!=="全部")query.orderStatuss=[statusOption.value];
-        const listPayload=await request("/unified-order/list",{...query,limit:1});
-        const listData=listPayload?.data||listPayload,total=Number(listData?.total??listData?.count??0);
-        const exportPayload=await request("/unified-order/list-export",query);
-        const rows=Array.isArray(exportPayload?.data)?exportPayload.data:(Array.isArray(exportPayload)?exportPayload:[]);
-        if(!rows.length)throw new Error("NCT_CRM_SOURCE_EMPTY");
-        if(total&&rows.length!==total)throw new Error(`NCT_CRM_DATA_TRUNCATED:${rows.length}/${total}`);
-        const columns=[...new Set(rows.flatMap(row=>Object.keys(row||{})))];
-        return JSON.stringify({headers:columns,rows,rowcount:total||rows.length,filters:selection});
+    const base="https://codecamp-marketing.codemao.cn",headers={"content-type":"application/json","systemType":"1"};
+    const request=async(path,body)=>{const response=await fetchWithTimeout(base+path,{method:"POST",credentials:"include",headers,body:JSON.stringify(body)},30000);if(response.status===401||response.status===403||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");if(!response.ok)throw new Error(`NCT_CRM_HTTP_${response.status}:${path}`);const payload=await response.json();if(payload?.success===false||Number(payload?.code||200)!==200)throw new Error(`NCT_CRM_API:${payload?.msg||payload?.message||path}`);return payload};
+    const nestedArrays=value=>{const found=[];const visit=(item,depth=0)=>{if(depth>4||item==null)return;if(Array.isArray(item)){found.push(item);for(const child of item)if(child&&typeof child==="object"&&!Array.isArray(child))visit(child,depth+1);return}if(typeof item==="object")for(const child of Object.values(item))visit(child,depth+1)};visit(value);return found};
+    const parameterPayload=await request("/system/params",["bk_unified_order_status"]);
+    const statusOption=nestedArrays(parameterPayload).flat().find(item=>{const name=item?.name??item?.label??item?.paramName??item?.param_name??item?.text;return String(name||"").trim()===orderStatus});
+    const statusValue=statusOption?.value??statusOption?.paramValue??statusOption?.param_value??statusOption?.code??statusOption?.id;
+    if(orderStatus!=="全部"&&(statusValue===undefined||statusValue===null||statusValue===""))throw new Error(`NCT_ORDER_STATUS_NOT_FOUND:${orderStatus}`);
+    let businessLineLookup={};
+    try{
+      const businessPayload=await request("/system/params",["lbk_distribution_business_line"]);
+      for(const item of nestedArrays(businessPayload).flat()){
+        const value=item?.value??item?.paramValue??item?.param_value??item?.code??item?.id;
+        const name=item?.name??item?.label??item?.paramName??item?.param_name??item?.text;
+        if(value!==undefined&&value!==null&&String(name||"").trim())businessLineLookup[String(value)]=String(name).trim();
       }
-    });
-    const data=results[0]?.result;if(!data)return {ok:false,error:"当前Chrome CRM订单页没有返回NCT年卡数据。"};
+    }catch{}
+    const localEpoch=(date,end=false)=>Math.floor(new Date(`${date}T${end?"23:59:59":"00:00:00"}+08:00`).getTime()/1000).toString();
+    const pageSize=200,query={page:1,limit:pageSize,paidAtFrom:localEpoch(startDate),paidAtTo:localEpoch(endDate,true),spuName:productName};
+    if(orderStatus!=="全部")query.orderStatuss=[statusValue];
+    const objectRows=payload=>nestedArrays(payload).filter(rows=>rows.length&&rows.every(row=>row&&typeof row==="object"&&!Array.isArray(row))).sort((a,b)=>b.length-a.length)[0]||[];
+    const listPayload=await request("/unified-order/list",query);
+    const totalCandidates=[listPayload?.data?.total,listPayload?.data?.count,listPayload?.result?.total,listPayload?.result?.count,listPayload?.total,listPayload?.count].map(Number).filter(Number.isFinite);
+    const total=totalCandidates[0]||0;
+    let rows=objectRows(listPayload);
+    if(!rows.length)throw new Error("NCT_CRM_SOURCE_EMPTY");
+    const expected=total||rows.length,maxPages=Math.max(1,Math.ceil(expected/pageSize));
+    for(let page=2;page<=maxPages;page++){
+      const pageRows=objectRows(await request("/unified-order/list",{...query,page}));
+      if(!pageRows.length)break;
+      rows.push(...pageRows);
+    }
+    const serverRows=rows.length;
+    if(total&&serverRows!==total)throw new Error(`NCT_CRM_DATA_TRUNCATED:${serverRows}/${total}`);
+    rows=rows.filter(row=>(orderStatus==="全部"||String(row.orderStatusStr||"").trim()===orderStatus)&&String(row.spuName||"").trim()===productName);
+    if(rows.some(row=>row.orderId!==undefined))rows=[...new Map(rows.map((row,index)=>[String(row.orderId??`row-${index}`),row])).values()];
+    if(!rows.length)throw new Error("NCT_CRM_SOURCE_EMPTY");
+    const columns=[...new Set(rows.flatMap(row=>Object.keys(row||{})))];
+    const data=JSON.stringify({headers:columns,rows,rowcount:rows.length,serverTotal:total||serverRows,serverRows,lookups:{businessLine:businessLineLookup},fetchedAt:new Date().toISOString(),filters:{startDate,endDate,orderStatus,productName}});
     return {ok:true,data,tabId:tab.id,filters};
   }catch(error){const text=String(error?.message||error);return {ok:false,error:text.includes("CRM_LOGIN_EXPIRED")?"当前谷歌浏览器的CRM登录已失效，请在订单列表页重新登录后重试。":`NCT年卡CRM读取失败：${text}`};}
 }
@@ -832,7 +845,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"nct-annual-card-26"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"nct-validated-fields-29"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
