@@ -10,6 +10,7 @@ test("NCT annual-card workflow stays wired end to end", () => {
   const background = read("chrome-extension/background.js");
   const manifest = JSON.parse(read("chrome-extension/manifest.json"));
   const sync = read("sync-nct-table.mjs");
+  const runner = read("run-nct-update.ps1");
 
   for (const id of ["nctBtn", "nctStartDate", "nctEndDate", "nctOrderStatus", "nctProductName", "configNctWorkbook"]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
@@ -32,4 +33,17 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(sync, /businessLineStr/);
   assert.match(sync, /NCT_SOURCE_COUNT_MISMATCH/);
   assert.match(sync, /NCT_VERIFY_HEADER_MISMATCH/);
+  assert.match(sync, /attempts=4/);
+  assert.match(sync, /DINGTALK_NETWORK_FAILED/);
+  assert.ok(runner.includes("$completed-and(Test-Path -LiteralPath $InputFile)"));
+});
+
+test("teaching-service writer retries transient DingTalk failures and preserves failed input", () => {
+  const sync = read("sync-service-data.mjs");
+  const runner = read("run-service-update.ps1");
+  assert.match(sync, /attempts=4/);
+  assert.match(sync, /DINGTALK_NETWORK_FAILED/);
+  assert.match(runner, /\$completed=\$false/);
+  assert.match(runner, /\$completed=\$true/);
+  assert.ok(runner.includes("$completed-and(Test-Path $InputFile)"));
 });
