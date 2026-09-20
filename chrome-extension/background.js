@@ -122,12 +122,14 @@ async function waitForTabReady(tabId,timeout=20000){
 
 async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=async()=>{}){
         const deadline=Date.now()+4*60*1000;
-        const api=async(url,options)=>{
+        const api=async(url,options,policy={})=>{
+          const maxAttempts=Math.max(1,Number(policy.attempts||3));
+          const requestTimeout=Math.max(3000,Number(policy.timeout||20000));
           let lastError;
-          for(let attempt=1;attempt<=3;attempt++){
+          for(let attempt=1;attempt<=maxAttempts;attempt++){
             if(Date.now()>=deadline)throw new Error("CRM_TOTAL_TIMEOUT");
             const controller=new AbortController();
-            const timer=setTimeout(()=>controller.abort(),20000);
+            const timer=setTimeout(()=>controller.abort(),requestTimeout);
             try{
               const r=await fetch(url,{credentials:"include",...(options||{}),signal:controller.signal});
               const bytes=await r.arrayBuffer();
@@ -142,7 +144,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
             }catch(error){
               lastError=error;
               if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;
-              if(attempt<3)await new Promise(r=>setTimeout(r,900*attempt));
+              if(attempt<maxAttempts)await new Promise(r=>setTimeout(r,900*attempt));
             }finally{clearTimeout(timer);}
           }
           const endpoint=(()=>{try{const parsed=new URL(url);return `${parsed.hostname}${parsed.pathname}`}catch{return String(url)}})();
@@ -220,7 +222,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         // Timely participation must come from the CRM live-board API.  The
         // course-detail `live_course` flag represents total participation and
         // does not match the board's "观看人数" metric.
-        const livePost=async(url,body)=>api(url,{method:"POST",headers:{"content-type":"application/json;charset=UTF-8","authorization_type":"3"},body:JSON.stringify(body)});
+        const livePost=async(url,body)=>api(url,{method:"POST",headers:{"content-type":"application/json;charset=UTF-8","authorization_type":"3"},body:JSON.stringify(body)},{timeout:12000,attempts:3});
         const firstBoards=await livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page:1,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]});
         let boards=firstBoards.data?.items||[];
         const boardPages=Math.ceil(Number(firstBoards.data?.total||boards.length)/Number(firstBoards.data?.pageSize||100));
@@ -228,16 +230,25 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         const boardResponses=await mapLimit(remainingPages,4,page=>livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]}));
         for(const next of boardResponses)boards.push(...(next.data?.items||[]));
         if(!boards.length)throw new Error("CRM_LIVE_BOARDS_EMPTY");
-        const studentIds=async(board,isParticipated)=>{
-          let pageIndex=1,ids=[],names={};
-          while(true){
-            const response=await livePost("https://cloud-gateway.codemao.cn/crm-common/shengwang/living/students",{roomUuid:board.roomUuid,pageIndex,pageSize:100,isParticipated});
-            const rows=response.data?.items||[];
-            for(const row of rows){const id=String(row.userId||"");if(id){ids.push(id);names[id]=String(row.studentName||row.wechatNickname||"");}}
-            if(pageIndex*100>=Number(response.data?.total||rows.length))break;
-            pageIndex++;
-          }
-          return {ids,names};
+        const rosterCache=new Map();
+        const studentIds=(board,isParticipated)=>{
+          const cacheKey=`${board.roomUuid}|${isParticipated?1:0}`;
+          if(rosterCache.has(cacheKey))return rosterCache.get(cacheKey);
+          const request=(async()=>{
+            let pageIndex=1,ids=[],names={};
+            while(true){
+              const requestedPageSize=300;
+              const response=await livePost("https://cloud-gateway.codemao.cn/crm-common/shengwang/living/students",{roomUuid:board.roomUuid,pageIndex,pageSize:requestedPageSize,isParticipated});
+              const rows=response.data?.items||[];
+              for(const row of rows){const id=String(row.userId||"");if(id){ids.push(id);names[id]=String(row.studentName||row.wechatNickname||"");}}
+              const actualPageSize=Number(response.data?.pageSize||rows.length||requestedPageSize);
+              if(!rows.length||pageIndex*actualPageSize>=Number(response.data?.total||rows.length))break;
+              pageIndex++;
+            }
+            return {ids,names};
+          })();
+          rosterCache.set(cacheKey,request);
+          return request;
         };
         let matchedLiveBoards=0;
         const liveMatches=[];
@@ -290,11 +301,11 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         // Fetch independent room rosters with bounded concurrency, then merge
         // them in source order so duplicate-room reconciliation stays stable.
         let completedLiveRooms=0;
-        const liveResults=await mapLimit(liveMatches,3,async match=>{
+        const liveResults=await mapLimit(liveMatches,8,async match=>{
           const [attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);
           completedLiveRooms++;
-          if(completedLiveRooms===liveMatches.length||completedLiveRooms%10===0){
-            await onProgress("正在读取CRM直播上座名单…",`已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
+          if(completedLiveRooms===liveMatches.length||completedLiveRooms%5===0){
+            await onProgress("正在读取CRM直播上座名单…",`8路并行 · 已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
           }
           return {...match,attended,absent};
         });
@@ -845,7 +856,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"nct-validated-fields-29"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"live-roster-fast-30"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
