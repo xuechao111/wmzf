@@ -137,13 +137,21 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
               try{text=new TextDecoder("utf-8",{fatal:true}).decode(bytes);}
               catch{text=new TextDecoder("gb18030",{fatal:true}).decode(bytes);}
               if(r.status===401)throw new Error("CRM_LOGIN_EXPIRED");
-              if(!r.ok)throw new Error(`CRM_HTTP_${r.status}`);
+              if(!r.ok){
+                let reason="";
+                try{const errorPayload=JSON.parse(text);reason=String(errorPayload?.message||errorPayload?.msg||errorPayload?.error||"").replace(/\s+/g," ").trim().slice(0,160);}catch{}
+                const httpError=new Error(`CRM_HTTP_${r.status}${reason?`:${reason}`:""}`);
+                httpError.httpStatus=r.status;
+                throw httpError;
+              }
               const parsed=JSON.parse(text);
               if(parsed?.code&&Number(parsed.code)!==200)throw new Error(`CRM_API_${parsed.code}`);
               return parsed;
             }catch(error){
               lastError=error;
               if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;
+              const httpStatus=Number(error?.httpStatus||0);
+              if(httpStatus>=400&&httpStatus<500&&httpStatus!==408&&httpStatus!==429)throw error;
               if(attempt<maxAttempts)await new Promise(r=>setTimeout(r,900*attempt));
             }finally{clearTimeout(timer);}
           }
@@ -237,7 +245,10 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
           const request=(async()=>{
             let pageIndex=1,ids=[],names={};
             while(true){
-              const requestedPageSize=300;
+              // This CRM endpoint rejects values above 100 with HTTP 400.
+              // Keep its verified maximum and gain speed through room-level
+              // concurrency and duplicate-room caching instead.
+              const requestedPageSize=100;
               const response=await livePost("https://cloud-gateway.codemao.cn/crm-common/shengwang/living/students",{roomUuid:board.roomUuid,pageIndex,pageSize:requestedPageSize,isParticipated});
               const rows=response.data?.items||[];
               for(const row of rows){const id=String(row.userId||"");if(id){ids.push(id);names[id]=String(row.studentName||row.wechatNickname||"");}}
@@ -301,11 +312,11 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         // Fetch independent room rosters with bounded concurrency, then merge
         // them in source order so duplicate-room reconciliation stays stable.
         let completedLiveRooms=0;
-        const liveResults=await mapLimit(liveMatches,8,async match=>{
+        const liveResults=await mapLimit(liveMatches,6,async match=>{
           const [attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);
           completedLiveRooms++;
           if(completedLiveRooms===liveMatches.length||completedLiveRooms%5===0){
-            await onProgress("正在读取CRM直播上座名单…",`8路并行 · 已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
+            await onProgress("正在读取CRM直播上座名单…",`6路并行 · 已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
           }
           return {...match,attended,absent};
         });
@@ -856,7 +867,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"live-roster-fast-30"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"live-roster-stable-31"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
