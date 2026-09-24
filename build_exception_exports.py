@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,104 @@ RAW = ROOT / "run-data" / "group-lessons-raw.json"
 OUT = ROOT / "run-data" / "exception-export-tables.json"
 CLASSES = ROOT / "run-data" / "classes.json"
 CN = timezone(timedelta(hours=8))
+
+
+CONSECUTIVE_COLUMNS = [
+    "学员ID", "学员姓名", "联系电话", "对应老师", "课期ID", "班级ID", "班级", "班型",
+    "连续起始周未完课", "最近一周未完课", "连续未完课周数", "促学电话互打", "赛考教练",
+    "促学说辞", "是否影响后续比赛", "跟进结果", "最近跟进日期", "备注", "统计周期",
+]
+
+
+def visible_phone(value):
+    """Keep only a CRM-visible phone number; never export encrypted payloads."""
+    text = str(value or "").strip()
+    visible = text.split("||", 1)[0].strip()
+    digits = re.sub(r"\D", "", visible)
+    return visible if len(digits) >= 7 and "*" not in visible else "CRM未提供明文"
+
+
+def build_consecutive_incomplete(blocks, main_term_by_class, now):
+    """Build the latest two opened calendar weeks' repeated-incomplete list."""
+    week_records = {}
+    for block in blocks:
+        info = block.get("info", {})
+        teacher = clean_teacher(info.get("teacherName"))
+        class_id = int(block.get("classId") or info.get("classId") or 0)
+        class_name = str(info.get("className") or "")
+        main_term = main_term_by_class.get(class_id, int(block.get("termId") or info.get("termId") or 0))
+        slot = schedule_label(block.get("items", []))
+        lessons_by_time = {}
+        for lesson in block.get("lessons", []):
+            number = int(lesson.get("course_number") or 0)
+            unlock = int(lesson.get("unlock_time") or 0)
+            if number > 0 and 0 < unlock <= now:
+                lessons_by_time.setdefault(unlock, []).append(lesson)
+        for unlock, same_time_lessons in lessons_by_time.items():
+            ordered = sorted(same_time_lessons, key=lambda item: (int(item.get("course_number") or 0), int(item.get("course_id") or 0)))
+            if len(ordered) < 2:
+                continue
+            completion = ordered[1]
+            course_id = int(completion.get("course_id") or 0)
+            week_start = monday(unlock)
+            for item in block.get("items", []):
+                if int(item.get("course_id") or 0) != course_id or bool(item.get("is_finish")):
+                    continue
+                student_id = str(item.get("user_id") or "").strip()
+                if not student_id:
+                    continue
+                record = {
+                    "id": student_id,
+                    "name": str(item.get("child_name") or item.get("nickname") or ""),
+                    "phone": visible_phone(item.get("phone_number") or item.get("bind_phone_number")),
+                    "teacher": teacher,
+                    "term": main_term,
+                    "classId": class_id,
+                    "className": class_name,
+                    "slot": slot,
+                    "courseNumber": int(completion.get("course_number") or 0),
+                }
+                # A learner can be duplicated after a class transfer. Prefer the
+                # record carrying a visible phone, otherwise keep the latest row.
+                previous = week_records.setdefault(week_start, {}).get(student_id)
+                if not previous or (previous["phone"] == "CRM未提供明文" and record["phone"] != "CRM未提供明文"):
+                    week_records[week_start][student_id] = record
+    opened_weeks = sorted(week_records)
+    if len(opened_weeks) < 2:
+        return [], ""
+    latest_week = opened_weeks[-1]
+    consecutive_weeks = [latest_week]
+    while consecutive_weeks[-1] - 7 * 86400 in week_records:
+        consecutive_weeks.append(consecutive_weeks[-1] - 7 * 86400)
+    consecutive_weeks.reverse()
+    if len(consecutive_weeks) < 2:
+        return [], ""
+    period = f"{datetime.fromtimestamp(consecutive_weeks[0], CN):%Y-%m-%d}至{datetime.fromtimestamp(latest_week + 6 * 86400, CN):%Y-%m-%d}"
+    rows = []
+    latest_ids = set(week_records[latest_week])
+    for student_id in latest_ids:
+        streak = []
+        for week_start in reversed(consecutive_weeks):
+            record = week_records[week_start].get(student_id)
+            if not record:
+                break
+            streak.append((week_start, record))
+        if len(streak) < 2:
+            continue
+        streak.reverse()
+        first_week, older = streak[0]
+        second_week, latest = streak[-1]
+        phone = next((record["phone"] for _week, record in reversed(streak) if record["phone"] != "CRM未提供明文"), "CRM未提供明文")
+        first_label = f"{datetime.fromtimestamp(first_week, CN):%m-%d}周"
+        second_label = f"{datetime.fromtimestamp(second_week, CN):%m-%d}周"
+        rows.append([
+            student_id, latest["name"] or older["name"], phone, latest["teacher"], latest["term"],
+            latest["classId"], latest["className"], latest["slot"],
+            f"{first_label}｜第{older['courseNumber']}课", f"{second_label}｜第{latest['courseNumber']}课", len(streak),
+            "待安排", "", "请尽快完成课程，避免影响后续比赛安排。", "否", "待跟进", "", "", period,
+        ])
+    rows.sort(key=lambda row: (row[3], row[7], row[1], row[0]))
+    return rows, period
 
 
 def clean_teacher(value):
@@ -375,6 +474,7 @@ def main():
                 int(current_metrics.get("liveAbsentStudents", 0) or 0), attend_count / expected, row.get("currentWeek", "")
             ])
         live_rows.sort(key=lambda x: (x[0], x[1], x[2]))
+    consecutive_rows, consecutive_period = build_consecutive_incomplete(blocks, main_term_by_class, now)
     tables = {
         "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "同期直播均值", "直播差值", "偶数课完课率", "同期完课均值", "完课差值", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
                  "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "同期直播均值": "float", "直播差值": "float", "偶数课完课率": "float", "同期完课均值": "float", "完课差值": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "同期直播均值": "0.0%", "直播差值": "0.0%", "偶数课完课率": "0.0%", "同期完课均值": "0.0%", "完课差值": "0.0%"}},
@@ -387,6 +487,8 @@ def main():
                  "dtypes": {"班级ID": "int", "直播课节": "int", "回放时长（秒）": "int", "回放进度": "float"}, "formats": {"回放进度": "0.0%"}},
         "班级直播上座": {"columns": ["老师姓名", "班型", "班级ID", "班级", "已开直播课节", "直播应到次数", "直播上座次数", "直播未上座次数", "直播未上座人数", "直播上座率", "统计周期"], "data": live_rows,
                        "dtypes": {"班级ID": "int", "直播应到次数": "int", "直播上座次数": "int", "直播未上座次数": "int", "直播未上座人数": "int", "直播上座率": "float"}, "formats": {"直播上座率": "0.0%"}},
+        "连续2周及以上未完课": {"columns": CONSECUTIVE_COLUMNS, "data": consecutive_rows,
+                       "dtypes": {"课期ID": "int", "班级ID": "int", "连续未完课周数": "int"}},
     }
     # Enrich the workbook overview with teaching-service metrics. Missing
     # values stay blank and are never converted to zero.
@@ -404,7 +506,7 @@ def main():
         overview.setdefault("dtypes", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "float", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "float"})
         overview.setdefault("formats", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "0.0%", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "0.0%"})
     OUT.write_text(json.dumps({"period": period, "fallback": not has_current, "tables": tables}, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps({"period": period, "fallback": not has_current, "overviewRows": len(overview_rows), "abnormalRows": len(abnormal_rows), "abnormalSummaryRows": len(abnormal_summary_rows), "recommendedRows": len(recommended_rows), "untimelyRows": len(untimely_rows), "replayRows": len(replay_rows), "liveRows": len(live_rows)}, ensure_ascii=False))
+    print(json.dumps({"period": period, "fallback": not has_current, "overviewRows": len(overview_rows), "abnormalRows": len(abnormal_rows), "abnormalSummaryRows": len(abnormal_summary_rows), "recommendedRows": len(recommended_rows), "untimelyRows": len(untimely_rows), "replayRows": len(replay_rows), "liveRows": len(live_rows), "consecutiveIncompleteRows": len(consecutive_rows), "consecutiveIncompletePeriod": consecutive_period}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

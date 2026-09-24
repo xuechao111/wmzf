@@ -169,7 +169,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
           }
           return block;
         };
-        const compactKeys=["class_id","class_name","live_course","user_id","course_id","course_number","unlock_time","nickname","child_name","is_open","course_open_time","is_finish","course_finish_time","watch_time","watch_process","day_of_week","class_time"];
+        const compactKeys=["class_id","class_name","live_course","user_id","course_id","course_number","unlock_time","nickname","child_name","phone_number","bind_phone_number","is_open","course_open_time","is_finish","course_finish_time","watch_time","watch_process","day_of_week","class_time"];
         const compactItem=item=>Object.fromEntries(compactKeys.filter(key=>item[key]!==undefined&&item[key]!==null).map(key=>[key,item[key]]));
         const compactInfo=info=>Object.fromEntries(["teacherName","className","termName","classId","termId"].filter(key=>info[key]!==undefined&&info[key]!==null).map(key=>[key,info[key]]));
         const mapLimit=async(values,limit,worker)=>{
@@ -513,7 +513,10 @@ function serviceSelectedDates(selection){
 
 function serviceTodayDate(selection){
   const now=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
-  if(!selection.days.includes(now.getDay())||now.getHours()<selection.startHour)return "";
+  // Daily call rankings are independent of the multi-day weekday selection.
+  // Before the configured working window starts, keep the value unavailable
+  // instead of reporting a misleading zero.
+  if(now.getHours()<selection.startHour)return "";
   return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 }
 
@@ -640,7 +643,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
         const [imDashboard,wecomDashboard]=await Promise.all([fetchDashboard(382,"im"),fetchDashboard(337,"wecom")]);
         const [im,wecom]=await Promise.all([imDashboard.fetchRange(dates),wecomDashboard.fetchRange(dates)]);
         let today=null;
-        if(todayDate){try{const [todayIm,todayWecom]=await Promise.all([imDashboard.fetchRange([todayDate]),wecomDashboard.fetchRange([todayDate])]);today={dates:[todayDate],im:todayIm,wecom:todayWecom};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
+        if(todayDate){try{const todayIm=await imDashboard.fetchRange([todayDate]);today={dates:[todayDate],im:todayIm};}catch(error){today={dates:[todayDate],teachers:[],groups:[],error:String(error?.message||error)};}}
         return JSON.stringify({dates,im,wecom,today,serviceSelection});
       }catch(error){return JSON.stringify({__serviceError:String(error?.message||error)});}
       }
@@ -867,7 +870,7 @@ ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"live-roster-stable-31"});return;}
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"daily-makeup-calls-32"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"]).then(sendResponse);return true;}
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}

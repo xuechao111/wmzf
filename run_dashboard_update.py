@@ -33,7 +33,7 @@ WORKBOOK = ""
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 CRM_PROFILE = ROOT / "crm-browser-profile"
 CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
-CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术"}
+CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术", "连续2周及以上未完课"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
 STYLE_STATE = DATA / "style-state.json"
 STYLE_LAYOUT_VERSION = 2
@@ -70,7 +70,7 @@ def configured_classes() -> list[list[int]]:
 def detail_teacher_sets(tables: dict[str, dict]) -> dict[str, set[str]]:
     """Snapshot generated teachers before the DingTalk table assembly stage."""
     result: dict[str, set[str]] = {}
-    teacher_headers = {"老师", "老师姓名", "主讲老师"}
+    teacher_headers = {"老师", "老师姓名", "主讲老师", "对应老师"}
     for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
         table = tables.get(name)
         if not table:
@@ -116,7 +116,7 @@ def filter_dingtalk_excluded_rows(tables: dict[str, dict], excluded: set[str]) -
     """Apply the configuration-panel exclusions at the final sync boundary."""
     if not excluded:
         return
-    teacher_headers = {"老师", "老师姓名", "主讲老师"}
+    teacher_headers = {"老师", "老师姓名", "主讲老师", "对应老师"}
     for table in tables.values():
         columns = [str(value or "").strip() for value in table.get("columns", [])]
         teacher_index = next((index for index, value in enumerate(columns) if value in teacher_headers), None)
@@ -522,6 +522,86 @@ def style_recommended_scripts_sheet(sheet_id: str, table: dict) -> None:
         print(f"推荐话术样式更新警告：{exc}", flush=True)
 
 
+def preserve_consecutive_followup_fields(sheet_id: str, table: dict) -> None:
+    """Keep teacher-entered follow-up fields aligned by learner ID across refreshes."""
+    result = mcp_call("get_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": "A:S"}, 180)
+    rows = find_rows(result) or []
+    if len(rows) < 2:
+        return
+    old_headers = [str(value or "").strip() for value in rows[0]]
+    new_headers = [str(value or "").strip() for value in table.get("columns", [])]
+    if "学员ID" not in old_headers or "学员ID" not in new_headers:
+        return
+    editable = {"联系电话", "促学电话互打", "赛考教练", "促学说辞", "是否影响后续比赛", "跟进结果", "最近跟进日期", "备注"}
+    old_id = old_headers.index("学员ID")
+    old_by_id = {}
+    for row in rows[1:]:
+        if old_id >= len(row):
+            continue
+        learner_id = str(row[old_id] or "").strip()
+        if learner_id:
+            old_by_id[learner_id] = row
+    new_id = new_headers.index("学员ID")
+    for row in table.get("data", []):
+        learner_id = str(row[new_id] or "").strip() if new_id < len(row) else ""
+        old_row = old_by_id.get(learner_id)
+        if not old_row:
+            continue
+        for column in editable:
+            if column not in old_headers or column not in new_headers:
+                continue
+            old_index, new_index = old_headers.index(column), new_headers.index(column)
+            old_value = old_row[old_index] if old_index < len(old_row) else ""
+            if old_value not in (None, ""):
+                row[new_index] = old_value
+
+
+def style_consecutive_incomplete_sheet(sheet_id: str, table: dict) -> None:
+    """Style the repeated-incomplete follow-up tracker and mark editable fields."""
+    row_count = len(table.get("data", []))
+    end_row = max(1, row_count + 1)
+    matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
+    try:
+        mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 4, "tabColor": "#D96C5F"})
+        mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
+        try:
+            mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
+        except Exception:
+            pass
+        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A1:S{end_row}"})
+        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:S1",
+                 "backgroundColors": matrix(1, 19, "#173F5F"), "fontColors": matrix(1, 19, "#FFFFFF"),
+                 "fontWeights": matrix(1, 19, "bold"), "fontSizes": matrix(1, 19, 11),
+                 "horizontalAlignments": matrix(1, 19, "center"), "verticalAlignments": matrix(1, 19, "middle"), "wordWrap": "autoWrap"})
+        if row_count:
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:K{end_row}",
+                     "backgroundColors": matrix(row_count, 11, "#F7FAFC"), "fontColors": matrix(row_count, 11, "#233746"),
+                     "fontSizes": matrix(row_count, 11, 10), "horizontalAlignments": matrix(row_count, 11, "center"),
+                     "verticalAlignments": matrix(row_count, 11, "middle"), "wordWrap": "autoWrap"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"L2:R{end_row}",
+                     "backgroundColors": matrix(row_count, 7, "#FFF5E8"), "fontColors": matrix(row_count, 7, "#7A4B16"),
+                     "fontSizes": matrix(row_count, 7, 10), "horizontalAlignments": matrix(row_count, 7, "center"),
+                     "verticalAlignments": matrix(row_count, 7, "middle"), "wordWrap": "autoWrap"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"S2:S{end_row}",
+                     "backgroundColors": matrix(row_count, 1, "#EAF3F8"), "fontColors": matrix(row_count, 1, "#456275"),
+                     "fontSizes": matrix(row_count, 1, 10), "horizontalAlignments": matrix(row_count, 1, "center"),
+                     "verticalAlignments": matrix(row_count, 1, "middle"), "wordWrap": "autoWrap"})
+        dimensions = [
+            ("ROWS", "1", 1, 48), ("ROWS", "2", row_count, 42),
+            ("COLUMNS", "A", 1, 120), ("COLUMNS", "B", 1, 110), ("COLUMNS", "C", 1, 145),
+            ("COLUMNS", "D", 1, 105), ("COLUMNS", "E", 2, 90), ("COLUMNS", "G", 1, 140),
+            ("COLUMNS", "H", 1, 90), ("COLUMNS", "I", 2, 150), ("COLUMNS", "K", 1, 105),
+            ("COLUMNS", "L", 2, 125), ("COLUMNS", "N", 1, 330), ("COLUMNS", "O", 1, 125),
+            ("COLUMNS", "P", 1, 140), ("COLUMNS", "Q", 1, 125), ("COLUMNS", "R", 1, 200), ("COLUMNS", "S", 1, 190),
+        ]
+        for dimension, start, length, size in dimensions:
+            if length:
+                mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
+                         "startIndex": start, "length": length, "pixelSize": size})
+    except Exception as exc:
+        print(f"连续两周未完课样式更新警告：{exc}", flush=True)
+
+
 def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_layout: bool = True) -> None:
     """Style learner details on the left and the teacher/category summary on the right."""
     summary_rows = len(table.get("summary", {}).get("data", []))
@@ -647,6 +727,8 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
             raise RuntimeError(f"创建子表失败：{name} {created}")
         sheet_id = created.get("sheetId") or name
         SHEET_IDS[name] = str(sheet_id)
+    if name == "连续2周及以上未完课":
+        preserve_consecutive_followup_fields(str(sheet_id), table)
     initialize_layout = not style_layout_initialized(name, str(sheet_id))
     layout = {}
     if name == "异常学员" and table.get("summary"):
@@ -713,6 +795,8 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
         style_abnormal_sheet(sheet_id, table, layout, initialize_layout)
     elif name == "推荐话术":
         style_recommended_scripts_sheet(sheet_id, table)
+    elif name == "连续2周及以上未完课":
+        style_consecutive_incomplete_sheet(sheet_id, table)
     mark_style_layout_initialized(name, str(sheet_id))
     return len(table.get("data", []))
 
