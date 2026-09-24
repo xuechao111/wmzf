@@ -14,11 +14,7 @@ CLASSES = ROOT / "run-data" / "classes.json"
 CN = timezone(timedelta(hours=8))
 
 
-CONSECUTIVE_COLUMNS = [
-    "学员ID", "学员姓名", "联系电话", "对应老师", "课期ID", "班级ID", "班级", "班型",
-    "连续起始周未完课", "最近一周未完课", "连续未完课周数", "促学电话互打", "赛考教练",
-    "促学说辞", "是否影响后续比赛", "跟进结果", "最近跟进日期", "备注", "统计周期",
-]
+CONSECUTIVE_COLUMNS = ["老师姓名", "落课≥2周学员总数", "连续2周学员数", "连续3周及以上学员数", "最长连续周数", "统计周期"]
 
 
 def visible_phone(value):
@@ -474,7 +470,23 @@ def main():
                 int(current_metrics.get("liveAbsentStudents", 0) or 0), attend_count / expected, row.get("currentWeek", "")
             ])
         live_rows.sort(key=lambda x: (x[0], x[1], x[2]))
-    consecutive_rows, consecutive_period = build_consecutive_incomplete(blocks, main_term_by_class, now)
+    consecutive_details, consecutive_period = build_consecutive_incomplete(blocks, main_term_by_class, now)
+    teacher_streaks = {}
+    for row in consecutive_details:
+        teacher_streaks.setdefault(str(row[3] or ""), []).append(int(row[10] or 0))
+    all_teachers = sorted({clean_teacher(block.get("info", {}).get("teacherName")) for block in blocks if clean_teacher(block.get("info", {}).get("teacherName"))})
+    consecutive_rows = []
+    for teacher in all_teachers:
+        streaks = teacher_streaks.get(teacher, [])
+        consecutive_rows.append([
+            teacher,
+            len(streaks),
+            sum(value == 2 for value in streaks),
+            sum(value >= 3 for value in streaks),
+            max(streaks, default=0),
+            consecutive_period,
+        ])
+    consecutive_rows.sort(key=lambda row: (-row[1], row[0]))
     tables = {
         "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "同期直播均值", "直播差值", "偶数课完课率", "同期完课均值", "完课差值", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
                  "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "同期直播均值": "float", "直播差值": "float", "偶数课完课率": "float", "同期完课均值": "float", "完课差值": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "同期直播均值": "0.0%", "直播差值": "0.0%", "偶数课完课率": "0.0%", "同期完课均值": "0.0%", "完课差值": "0.0%"}},
@@ -488,7 +500,7 @@ def main():
         "班级直播上座": {"columns": ["老师姓名", "班型", "班级ID", "班级", "已开直播课节", "直播应到次数", "直播上座次数", "直播未上座次数", "直播未上座人数", "直播上座率", "统计周期"], "data": live_rows,
                        "dtypes": {"班级ID": "int", "直播应到次数": "int", "直播上座次数": "int", "直播未上座次数": "int", "直播未上座人数": "int", "直播上座率": "float"}, "formats": {"直播上座率": "0.0%"}},
         "连续2周及以上未完课": {"columns": CONSECUTIVE_COLUMNS, "data": consecutive_rows,
-                       "dtypes": {"课期ID": "int", "班级ID": "int", "连续未完课周数": "int"}},
+                       "dtypes": {"落课≥2周学员总数": "int", "连续2周学员数": "int", "连续3周及以上学员数": "int", "最长连续周数": "int"}},
     }
     # Enrich the workbook overview with teaching-service metrics. Missing
     # values stay blank and are never converted to zero.
