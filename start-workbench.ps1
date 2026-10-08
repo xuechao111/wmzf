@@ -1,9 +1,10 @@
-param([switch]$NoBrowser, [int]$Port = 8765)
+﻿param([switch]$NoBrowser, [int]$Port = 8765)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $url = "http://127.0.0.1:$Port/"
-$expectedApiVersion = '2026-10-07-mcp-relay'
+$expectedApiVersion = '2026-10-08-update-entry-r3'
+$expectedBridgeHash = (Get-FileHash -LiteralPath (Join-Path $root 'bridge.ps1') -Algorithm SHA256).Hash
 $healthy = $false
 try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 4
@@ -11,7 +12,7 @@ try {
     if ($healthy) {
         try {
             $capability = Invoke-RestMethod -UseBasicParsing -Uri ("http://127.0.0.1:$Port/health") -TimeoutSec 3
-            $healthy = $capability.ok -eq $true -and [string]$capability.apiVersion -eq $expectedApiVersion
+            $healthy = $capability.ok -eq $true -and [string]$capability.apiVersion -eq $expectedApiVersion -and [string]$capability.bridgeHash -eq $expectedBridgeHash -and [string]$capability.sourceRoot -ieq $root
         } catch { $healthy = $false }
     }
 } catch {}

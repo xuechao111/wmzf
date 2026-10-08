@@ -5,7 +5,8 @@ Add-Type -AssemblyName System.Web
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8765 }
-$workbenchApiVersion = '2026-10-07-mcp-relay'
+$workbenchApiVersion = '2026-10-08-update-entry-r3'
+$runningBridgeHash = (Get-FileHash -LiteralPath $MyInvocation.MyCommand.Path -Algorithm SHA256).Hash
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
     $env:HF_DASHBOARD_SOURCE_ROOT
 } elseif (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -1022,7 +1023,7 @@ while ($true) {
         }
         switch ($path) {
             '/health' {
-                $health = @{ ok=$true; apiVersion=$workbenchApiVersion } | ConvertTo-Json -Compress
+                $health = @{ ok=$true; apiVersion=$workbenchApiVersion; sourceRoot=$sourceRoot; runtimeRoot=$root; processId=$PID; bridgeHash=$runningBridgeHash } | ConvertTo-Json -Compress
                 Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($health)) 'application/json; charset=utf-8'
             }
             '/' { Send-File $stream $indexFile 'text/html; charset=utf-8' }
