@@ -21,11 +21,18 @@ for(const c of classes){
   for(let n=2;n<=50;n+=2){const rows=[...byStudent.values()].map(s=>s.items.get(n)).filter(Boolean);if(!rows.length)continue;const sample=rows[0];const courseStarted=Number(sample.unlock_time||0)<=Date.now()/1000;const expected=courseStarted?rows.length:0;const doneRows=courseStarted?rows.filter(x=>x.is_finish):[];const done=doneRows.length;const firstRows=[...byStudent.values()].map(s=>s.items.get(n-1)).filter(Boolean);const firstStarted=firstRows.length&&Number(firstRows[0].unlock_time||0)<=Date.now()/1000;const firstExpected=firstStarted?firstRows.length:0;const firstArrivedIds=new Set(firstStarted?firstRows.filter(x=>x.is_open).map(x=>String(x.user_id)):[]);const doneIds=new Set(doneRows.map(x=>String(x.user_id)));const arrivedIncomplete=courseStarted?[...firstArrivedIds].filter(uid=>!doneIds.has(uid)).length:0;const unarrived=courseStarted?rows.filter(x=>!firstArrivedIds.has(String(x.user_id))).length:0;const board=c.liveAttendance?.[n-1];const liveAttend=board?new Set(board.attendedIds||[]).size:firstRows.filter(x=>x.live_course===true).length;const liveExpected=firstStarted?(board?new Set(board.expectedIds||[]).size:firstRows.length):0;summary.push([mainTermByClass.get(Number(c.classId))||c.termId,c.info.termName||"",teacher,c.classId,className,n,courseNames.get(n)||"",Number(sample.unlock_time||0),expected,done,firstExpected,firstArrivedIds.size,arrivedIncomplete,unarrived,expected-done,expected?done/expected:0,liveExpected,firstStarted?liveAttend:0,liveExpected?liveAttend/liveExpected:0,courseNames.get(n-1)||""]);}
 }
 const now=new Date();const shanghai=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));const day=(shanghai.getDay()+6)%7;const monday=new Date(shanghai);monday.setHours(0,0,0,0);monday.setDate(monday.getDate()-day);const sunday=new Date(monday);sunday.setDate(sunday.getDate()+7);const startSec=monday.getTime()/1000,endSec=sunday.getTime()/1000;
+const shanghaiWeekStartSec=sec=>{const dt=new Date(sec*1000);const sh=new Date(dt.toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));const d=(sh.getDay()+6)%7;sh.setHours(0,0,0,0);sh.setDate(sh.getDate()-d);return sh.getTime()/1000;};
+const rowHasOpened=r=>r[8]>0||r[16]>0;
 let dashboardStartSec=startSec,dashboardEndSec=endSec;
 let weekly=summary.filter(r=>r[5]%2===0&&r[7]>=dashboardStartSec&&r[7]<dashboardEndSec);
-if(!weekly.some(r=>r[8]>0||r[16]>0)){
-  dashboardStartSec-=7*86400;dashboardEndSec-=7*86400;
-  weekly=summary.filter(r=>r[5]%2===0&&r[7]>=dashboardStartSec&&r[7]<dashboardEndSec);
+if(!weekly.some(rowHasOpened)){
+  const openedWeeks=[...new Set(summary.filter(rowHasOpened).map(r=>shanghaiWeekStartSec(r[7])))].filter(sec=>sec<=startSec).sort((a,b)=>a-b);
+  if(openedWeeks.length){
+    dashboardStartSec=openedWeeks.at(-1);dashboardEndSec=dashboardStartSec+7*86400;
+    weekly=summary.filter(r=>r[5]%2===0&&r[7]>=dashboardStartSec&&r[7]<dashboardEndSec);
+  }else{
+    weekly=[];
+  }
 }
 weekly.sort((a,b)=>a[0]-b[0]||b[15]-a[15]||b[18]-a[18]||String(a[2]).localeCompare(String(b[2]),"zh-CN")||a[3]-b[3]);
 const overview=[];const groups=new Map();for(const r of weekly){const k=`${r[0]}|${r[2]}`;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}for(const rs of groups.values()){const total=rs.reduce((a,r)=>a+r[8],0),done=rs.reduce((a,r)=>a+r[9],0),arrivalExpected=rs.reduce((a,r)=>a+r[10],0),arrivalAttend=rs.reduce((a,r)=>a+r[11],0),arrived=rs.reduce((a,r)=>a+r[12],0),liveTotal=rs.reduce((a,r)=>a+r[16],0),liveAttend=rs.reduce((a,r)=>a+r[17],0),openedClasses=new Set(rs.filter(r=>r[8]>0||r[16]>0).map(r=>r[3])).size;overview.push([rs[0][0],rs[0][2],openedClasses,arrivalExpected,arrivalAttend,arrivalExpected?arrivalAttend/arrivalExpected:0,liveTotal,liveAttend,liveTotal?liveAttend/liveTotal:0,total,done,arrived,total-done,total?done/total:0]);}

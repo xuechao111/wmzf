@@ -27,8 +27,8 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(background, /orderStatuss/);
   assert.match(background, /spuName/);
   assert.ok(manifest.host_permissions.includes("https://codecamp-marketing.codemao.cn/*"));
-  assert.equal(manifest.version, "1.6.31");
-  assert.match(html, /const minimum='1\.6\.31'/);
+  assert.equal(manifest.version, "1.6.37");
+  assert.match(html, /const minimum='1\.6\.37'/);
   assert.match(background, /mapLimit\(liveMatches,6/);
   assert.match(background, /requestedPageSize=100/);
   assert.match(background, /timeout:12000,attempts:3/);

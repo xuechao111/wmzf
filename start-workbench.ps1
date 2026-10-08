@@ -3,10 +3,17 @@ param([switch]$NoBrowser, [int]$Port = 8765)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $url = "http://127.0.0.1:$Port/"
+$expectedApiVersion = '2026-10-07-mcp-relay'
 $healthy = $false
 try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 4
     $healthy = $response.StatusCode -eq 200 -and $response.Content -match 'CODEMAO TEACHING OPS'
+    if ($healthy) {
+        try {
+            $capability = Invoke-RestMethod -UseBasicParsing -Uri ("http://127.0.0.1:$Port/health") -TimeoutSec 3
+            $healthy = $capability.ok -eq $true -and [string]$capability.apiVersion -eq $expectedApiVersion
+        } catch { $healthy = $false }
+    }
 } catch {}
 
 if (-not $healthy) {

@@ -36,13 +36,13 @@ for(let i=0;i<classes.length;i++){
   const lessons=catalog.filter(c=>/^\d+-/.test(String(c.course_name||""))&&!/赛考精讲课/.test(String(c.course_name||""))).sort((a,b)=>Number(a.unlock_time||0)-Number(b.unlock_time||0)||Number(a.course_number||0)-Number(b.course_number||0)).slice(0,50);
   if(!lessons.length) console.log("  course names:", catalog.slice(-12).map(x=>x.course_name).join(" | "));
   if(!lessons.length){output.push({classId,termId,info,lessons:[],items:[],reason:"no_lessons"});continue;}
-  // Keep the current week and two preceding weeks. The extra prior week is
-  // required when the dashboard falls back before this week's first class.
+  // Keep the current week and three preceding weeks. The extra prior weeks are
+  // required when the dashboard falls back across one or more unopened weeks.
   const nowSec=Date.now()/1000;
   const shanghai=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Shanghai"}));
   const weekday=(shanghai.getDay()+6)%7;
   const monday=new Date(shanghai);monday.setHours(0,0,0,0);monday.setDate(monday.getDate()-weekday);
-  const windowStart=monday.getTime()/1000-14*86400,windowEnd=monday.getTime()/1000+7*86400;
+  const windowStart=monday.getTime()/1000-21*86400,windowEnd=monday.getTime()/1000+7*86400;
   const courseIds=lessons.filter(x=>Number(x.unlock_time||0)>=windowStart&&Number(x.unlock_time||0)<windowEnd&&Number(x.unlock_time||0)<=nowSec).map(x=>x.course_id); const items=[]; const pageSize=500;
   for(let offset=0;offset<courseIds.length;offset+=courseChunkSize){
     const ids=courseIds.slice(offset,offset+courseChunkSize); const openCourseList=ids.map(courseId=>({courseId,paramValue:[0,1],isAllSelect:true}));

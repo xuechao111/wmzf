@@ -26,8 +26,9 @@ def visible_phone(value):
 
 
 def build_consecutive_incomplete(blocks, main_term_by_class, now):
-    """Build the latest two opened calendar weeks' repeated-incomplete list."""
+    """Build the latest opened teaching weeks' repeated-incomplete list."""
     week_records = {}
+    opened_weeks = set()
     for block in blocks:
         info = block.get("info", {})
         teacher = clean_teacher(info.get("teacherName"))
@@ -48,6 +49,7 @@ def build_consecutive_incomplete(blocks, main_term_by_class, now):
             completion = ordered[1]
             course_id = int(completion.get("course_id") or 0)
             week_start = monday(unlock)
+            opened_weeks.add(week_start)
             for item in block.get("items", []):
                 if int(item.get("course_id") or 0) != course_id or bool(item.get("is_finish")):
                     continue
@@ -70,23 +72,24 @@ def build_consecutive_incomplete(blocks, main_term_by_class, now):
                 previous = week_records.setdefault(week_start, {}).get(student_id)
                 if not previous or (previous["phone"] == "CRM未提供明文" and record["phone"] != "CRM未提供明文"):
                     week_records[week_start][student_id] = record
-    opened_weeks = sorted(week_records)
+    opened_weeks = sorted(opened_weeks)
     if len(opened_weeks) < 2:
         return [], ""
     latest_week = opened_weeks[-1]
-    consecutive_weeks = [latest_week]
-    while consecutive_weeks[-1] - 7 * 86400 in week_records:
-        consecutive_weeks.append(consecutive_weeks[-1] - 7 * 86400)
-    consecutive_weeks.reverse()
-    if len(consecutive_weeks) < 2:
+    if latest_week not in week_records:
         return [], ""
-    period = f"{datetime.fromtimestamp(consecutive_weeks[0], CN):%Y-%m-%d}至{datetime.fromtimestamp(latest_week + 6 * 86400, CN):%Y-%m-%d}"
+    # Track consecutive opened teaching weeks. Calendar weeks without opened
+    # lessons, such as holidays, should not break a learner's falling-behind
+    # streak.
+    consecutive_weeks = opened_weeks
+    period_start = opened_weeks[-2]
+    period = f"{datetime.fromtimestamp(period_start, CN):%Y-%m-%d}至{datetime.fromtimestamp(latest_week + 6 * 86400, CN):%Y-%m-%d}"
     rows = []
     latest_ids = set(week_records[latest_week])
     for student_id in latest_ids:
         streak = []
         for week_start in reversed(consecutive_weeks):
-            record = week_records[week_start].get(student_id)
+            record = week_records.get(week_start, {}).get(student_id)
             if not record:
                 break
             streak.append((week_start, record))
@@ -111,6 +114,73 @@ def build_consecutive_incomplete(blocks, main_term_by_class, now):
 def clean_teacher(value):
     text = str(value or "")
     return text.rsplit("-C", 1)[0] if "-C" in text else text
+
+
+def previous_week_label(value):
+    """Return the prior Monday label for a snapshot week such as 2026-09-14周."""
+    text = str(value or "").strip().removesuffix("周")
+    try:
+        return (datetime.strptime(text, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d周")
+    except ValueError:
+        return ""
+
+
+def build_cohort_exception_rows(snapshot):
+    """Expand teacher/cohort attendance changes to one filterable learner row."""
+    rows = []
+    categories = (
+        ("lastWeekCameThisWeekMissed", "上周准时参播｜本周未准时参播", "未准时参播", "准时参播"),
+        ("lastWeekMissedThisWeekCame", "上周未准时参播｜本周准时参播", "准时参播", "未准时参播"),
+    )
+    for teacher_row in snapshot.get("rows", []):
+        comparison = teacher_row.get("timelyLiveComparison") or {}
+        if not comparison.get("hasBaseline"):
+            continue
+        current = teacher_row.get("current") or {}
+        previous = teacher_row.get("previous") or {}
+        finish_has_baseline = int(previous.get("evenExpected") or 0) > 0
+        current_week = str(teacher_row.get("currentWeek") or "")
+        previous_week = previous_week_label(current_week)
+        common = [
+            str(teacher_row.get("cohort") or ""),
+            str(teacher_row.get("teacher") or ""),
+        ]
+        for key, category, current_status, previous_status in categories:
+            learners = (comparison.get("attendanceChanges") or {}).get(key) or []
+            for learner in learners:
+                student_id = str(learner.get("id") or "").strip()
+                if not student_id:
+                    continue
+                rows.append(common + [
+                    category,
+                    str(learner.get("name") or ""),
+                    student_id,
+                    current_status,
+                    previous_status,
+                    str(comparison.get("label") or ""),
+                    comparison.get("currentRate"),
+                    comparison.get("previousRate"),
+                    comparison.get("gap"),
+                    int(comparison.get("currentAttend") or 0),
+                    int(comparison.get("currentExpected") or 0),
+                    int(comparison.get("previousAttend") or 0),
+                    int(comparison.get("previousExpected") or 0),
+                    current.get("finishRate"),
+                    previous.get("finishRate") if finish_has_baseline else "",
+                    (float(current.get("finishRate") or 0) - float(previous.get("finishRate") or 0)) if finish_has_baseline else "",
+                    int(current.get("evenDone") or 0),
+                    int(current.get("evenExpected") or 0),
+                    int(previous.get("evenDone") or 0) if finish_has_baseline else "",
+                    int(previous.get("evenExpected") or 0) if finish_has_baseline else "",
+                    current_week,
+                    previous_week,
+                ])
+    category_order = {
+        "上周准时参播｜本周未准时参播": 0,
+        "上周未准时参播｜本周准时参播": 1,
+    }
+    rows.sort(key=lambda row: (row[0], row[1], category_order.get(row[2], 9), row[3], row[4]))
+    return rows
 
 
 def monday(seconds):
@@ -229,8 +299,28 @@ def main():
     now = int(time.time())
     blocks = [b for b in raw if not b.get("excluded") and clean_teacher(b.get("info", {}).get("teacherName")) != "薛超" and b.get("lessons")]
     current = monday(now)
-    has_current = any(current <= int(l.get("unlock_time") or 0) < current + 7 * 86400 and int(l.get("unlock_time") or 0) <= now for b in blocks for l in b["lessons"])
-    start = current if has_current else current - 7 * 86400
+    opened_weeks = set()
+    for block in blocks:
+        lessons_by_time = {}
+        populated_course_ids = {
+            int(item.get("course_id") or 0)
+            for item in block.get("items", [])
+            if int(item.get("course_id") or 0) > 0
+        }
+        for lesson in block.get("lessons", []):
+            unlock_time = int(lesson.get("unlock_time") or 0)
+            if int(lesson.get("course_number") or 0) > 0 and unlock_time > 0:
+                lessons_by_time.setdefault(unlock_time, []).append(lesson)
+        for unlock_time, same_time_lessons in lessons_by_time.items():
+            ordered = sorted(same_time_lessons, key=lambda item: (int(item.get("course_number") or 0), int(item.get("course_id") or 0)))
+            if len(ordered) < 2:
+                continue
+            completion = ordered[1]
+            course_id = int(completion.get("course_id") or 0)
+            if 0 < unlock_time <= now and course_id in populated_course_ids:
+                opened_weeks.add(monday(unlock_time))
+    has_current = current in opened_weeks
+    start = current if has_current else max((week for week in opened_weeks if week <= current), default=current - 7 * 86400)
     end = start + 7 * 86400
     period = f"{datetime.fromtimestamp(start, CN):%Y-%m-%d}至{datetime.fromtimestamp(end - 1, CN):%Y-%m-%d}"
     abnormal = {}
@@ -255,6 +345,10 @@ def main():
         term: datetime.fromtimestamp(first_unlock, CN).strftime("%m%d")
         for term, first_unlock in term_first_unlock.items()
     }
+    term_first_labels = {
+        term: datetime.fromtimestamp(monday(first_unlock), CN).strftime("%Y-%m-%d周")
+        for term, first_unlock in term_first_unlock.items()
+    }
     for block in blocks:
         info = block.get("info", {})
         teacher = clean_teacher(info.get("teacherName"))
@@ -276,7 +370,8 @@ def main():
         opened_live_numbers = []
         main_term = main_term_by_class.get(class_id, int(block.get("termId") or info.get("termId") or 0))
         term_short_id = term_short_ids.get(main_term, "")
-        teacher_key = (main_term, teacher)
+        main_term_label = term_first_labels.get(main_term, str(main_term))
+        teacher_key = (main_term_label, teacher)
         teacher_total = overview.setdefault(teacher_key, {"classes": set(), "arrival_expected": 0, "arrival_attend": 0, "live_expected": 0, "live_attend": 0, "finish_expected": 0, "finished": 0, "arrived_unfinished": 0, "unarrived": 0, "incomplete_ids": set(), "arrived_ids": set(), "live_absent_ids": set(), "replay_ids": set()})
         # CRM course numbers are not guaranteed to remain odd/even or
         # contiguous (older cohorts can reach 60 and some templates skip
@@ -424,22 +519,15 @@ def main():
             warnings.append("偶数课完课率低于同期均值")
         if len(peers) > 1 and arrived_rate > avg_arrived:
             warnings.append("到课未完课率高于同期均值")
-        overview_rows.append([term, teacher, len(rec["classes"]), arrival_rate, live_rate, avg_live, live_rate - avg_live, finish_rate, avg_finish, finish_rate - avg_finish, len(rec["incomplete_ids"]), len(rec["live_absent_ids"]), len(rec["replay_ids"]), len(rec["arrived_ids"]), "；".join(warnings) or "正常", period])
-    overview_rows.sort(key=lambda x: (x[0], -x[7], -x[4], x[1]))
+        overview_rows.append([term, teacher, len(rec["classes"]), arrival_rate, live_rate, finish_rate, len(rec["incomplete_ids"]), len(rec["live_absent_ids"]), len(rec["replay_ids"]), len(rec["arrived_ids"]), "；".join(warnings) or "正常", period])
+    overview_rows.sort(key=lambda x: (x[0], -x[5], -x[4], x[1]))
     # The console snapshot chooses the latest available week independently for
     # each cohort.  Reuse that verified result for the overview and live-seat
     # sheets so completed cohorts do not disappear when newer cohorts continue.
     snapshot_path = ROOT / "dashboard-snapshot.json"
+    snapshot = {}
     if snapshot_path.exists():
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        term_by_cohort = {}
-        for block in blocks:
-            lesson_times = [int(x.get("unlock_time") or 0) for x in block.get("lessons", []) if int(x.get("unlock_time") or 0) > 0]
-            if not lesson_times:
-                continue
-            cohort_label = datetime.fromtimestamp(monday(min(lesson_times)), CN).strftime("%Y-%m-%d周")
-            class_id = int(block.get("classId") or block.get("info", {}).get("classId") or 0)
-            term_by_cohort.setdefault(cohort_label, main_term_by_class.get(class_id, int(block.get("termId") or block.get("info", {}).get("termId") or 0)))
         overview_rows = []
         for row in snapshot.get("rows", []):
             current_metrics = row.get("current", {})
@@ -449,14 +537,13 @@ def main():
             if row.get("finishAnomaly"):
                 warnings.append("偶数课完课率低于同期均值")
             overview_rows.append([
-                term_by_cohort.get(row.get("cohort"), 0), row.get("teacher", ""),
+                row.get("cohort", ""), row.get("teacher", ""),
                 len([x for x in snapshot.get("classes", []) if x.get("teacher") == row.get("teacher") and x.get("cohort") == row.get("cohort")]),
-                current_metrics.get("arrivalRate", 0), current_metrics.get("liveRate", 0), row.get("cohortLiveAverage", 0), row.get("cohortLiveGap", 0),
-                current_metrics.get("finishRate", 0), row.get("cohortFinishAverage", 0), row.get("cohortFinishGap", 0),
+                current_metrics.get("arrivalRate", 0), current_metrics.get("liveRate", 0), current_metrics.get("finishRate", 0),
                 current_metrics.get("incompleteStudents", 0), current_metrics.get("liveAbsentStudents", 0), current_metrics.get("replayStudents", 0), current_metrics.get("arrivedIncompleteStudents", 0),
                 "；".join(warnings) or "正常", row.get("currentWeek", "")
             ])
-        overview_rows.sort(key=lambda x: (x[0], -x[7], -x[4], x[1]))
+        overview_rows.sort(key=lambda x: (x[0], -x[5], -x[4], x[1]))
         live_rows = []
         for row in snapshot.get("classes", []):
             current_metrics = row.get("current", {})
@@ -470,6 +557,7 @@ def main():
                 int(current_metrics.get("liveAbsentStudents", 0) or 0), attend_count / expected, row.get("currentWeek", "")
             ])
         live_rows.sort(key=lambda x: (x[0], x[1], x[2]))
+    cohort_exception_rows = build_cohort_exception_rows(snapshot)
     consecutive_details, consecutive_period = build_consecutive_incomplete(blocks, main_term_by_class, now)
     teacher_streaks = {}
     for row in consecutive_details:
@@ -488,8 +576,8 @@ def main():
         ])
     consecutive_rows.sort(key=lambda row: (-row[1], row[0]))
     tables = {
-        "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "同期直播均值", "直播差值", "偶数课完课率", "同期完课均值", "完课差值", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
-                 "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "同期直播均值": "float", "直播差值": "float", "偶数课完课率": "float", "同期完课均值": "float", "完课差值": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "同期直播均值": "0.0%", "直播差值": "0.0%", "偶数课完课率": "0.0%", "同期完课均值": "0.0%", "完课差值": "0.0%"}},
+        "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "偶数课完课率", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
+                 "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "偶数课完课率": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "偶数课完课率": "0.0%"}},
         "异常学员": {"columns": ["异常等级", "老师姓名", "课期ID", "学生姓名", "学生ID", "班型", "异常原因", "统计周期"], "data": abnormal_rows,
                  "summary": {"title": "各老师异常等级与学员类别汇总（按学员去重）", "columns": abnormal_summary_columns, "data": abnormal_summary_rows}},
         "推荐话术": {"columns": ["异常学员类别", "温和关怀型", "陪伴推进型", "积极鼓励型", "统计周期"], "data": recommended_rows},
@@ -499,6 +587,9 @@ def main():
                  "dtypes": {"班级ID": "int", "直播课节": "int", "回放时长（秒）": "int", "回放进度": "float"}, "formats": {"回放进度": "0.0%"}},
         "班级直播上座": {"columns": ["老师姓名", "班型", "班级ID", "班级", "已开直播课节", "直播应到次数", "直播上座次数", "直播未上座次数", "直播未上座人数", "直播上座率", "统计周期"], "data": live_rows,
                        "dtypes": {"班级ID": "int", "直播应到次数": "int", "直播上座次数": "int", "直播未上座次数": "int", "直播未上座人数": "int", "直播上座率": "float"}, "formats": {"直播上座率": "0.0%"}},
+        "课期异常": {"columns": ["课期", "老师姓名", "异常类型", "学生姓名", "学生ID", "本周参播状态", "上周参播状态", "对比时段", "本周准时参播率", "上周准时参播率", "直播较上周", "本周准时参播人次", "本周直播应到人次", "上周准时参播人次", "上周直播应到人次", "本周完课率", "上周完课率", "完课较上周", "本周完成人次", "本周应完人次", "上周完成人次", "上周应完人次", "本周周期", "上周周期"], "data": cohort_exception_rows,
+                 "dtypes": {"本周准时参播率": "float", "上周准时参播率": "float", "直播较上周": "float", "本周准时参播人次": "int", "本周直播应到人次": "int", "上周准时参播人次": "int", "上周直播应到人次": "int", "本周完课率": "float", "上周完课率": "float", "完课较上周": "float", "本周完成人次": "int", "本周应完人次": "int", "上周完成人次": "int", "上周应完人次": "int"},
+                 "formats": {"本周准时参播率": "0.0%", "上周准时参播率": "0.0%", "直播较上周": "0.0%", "本周完课率": "0.0%", "上周完课率": "0.0%", "完课较上周": "0.0%"}},
         "连续2周及以上未完课": {"columns": CONSECUTIVE_COLUMNS, "data": consecutive_rows,
                        "dtypes": {"落课≥2周学员总数": "int", "连续2周学员数": "int", "连续3周及以上学员数": "int", "最长连续周数": "int"}},
     }
@@ -517,8 +608,9 @@ def main():
             export_row.extend([service.get("imRate"), service.get("wecomRate"), service.get("updatedAt", "")])
         overview.setdefault("dtypes", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "float", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "float"})
         overview.setdefault("formats", {}).update({"IM 3\u5206\u949f\u56de\u590d\u7387": "0.0%", "\u4f01\u5fae2\u5c0f\u65f6\u56de\u590d\u7387": "0.0%"})
-    OUT.write_text(json.dumps({"period": period, "fallback": not has_current, "tables": tables}, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps({"period": period, "fallback": not has_current, "overviewRows": len(overview_rows), "abnormalRows": len(abnormal_rows), "abnormalSummaryRows": len(abnormal_summary_rows), "recommendedRows": len(recommended_rows), "untimelyRows": len(untimely_rows), "replayRows": len(replay_rows), "liveRows": len(live_rows), "consecutiveIncompleteRows": len(consecutive_rows), "consecutiveIncompletePeriod": consecutive_period}, ensure_ascii=False))
+    fallback = start != current
+    OUT.write_text(json.dumps({"period": period, "fallback": fallback, "tables": tables}, ensure_ascii=False), encoding="utf-8")
+    print(json.dumps({"period": period, "fallback": fallback, "overviewRows": len(overview_rows), "abnormalRows": len(abnormal_rows), "abnormalSummaryRows": len(abnormal_summary_rows), "recommendedRows": len(recommended_rows), "untimelyRows": len(untimely_rows), "replayRows": len(replay_rows), "liveRows": len(live_rows), "cohortExceptionRows": len(cohort_exception_rows), "consecutiveIncompleteRows": len(consecutive_rows), "consecutiveIncompletePeriod": consecutive_period}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

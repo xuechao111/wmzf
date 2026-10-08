@@ -11,7 +11,18 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+import base64
 from pathlib import Path
+
+from overview_total_table import SHEET_NAME as OVERVIEW_TOTAL_SHEET_NAME
+from overview_total_table import build_overview_total_table
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or SOURCE_ROOT)
@@ -33,11 +44,11 @@ WORKBOOK = ""
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 CRM_PROFILE = ROOT / "crm-browser-profile"
 CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
-CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术", "连续2周及以上未完课"}
+CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术", "课期异常", "连续2周及以上未完课"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
 STYLE_STATE = DATA / "style-state.json"
 STYLE_LAYOUT_VERSION = 2
-DISABLED_SHEETS = {"\u63a8\u8350\u8bdd\u672f"}
+DISABLED_SHEETS = set()
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
 
@@ -71,7 +82,7 @@ def detail_teacher_sets(tables: dict[str, dict]) -> dict[str, set[str]]:
     """Snapshot generated teachers before the DingTalk table assembly stage."""
     result: dict[str, set[str]] = {}
     teacher_headers = {"老师", "老师姓名", "主讲老师", "对应老师"}
-    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座"):
+    for name in ("异常学员", "未准时参播学员", "回放学员", "班级直播上座", "课期异常"):
         table = tables.get(name)
         if not table:
             continue
@@ -233,6 +244,69 @@ def credentials() -> tuple[str, str]:
 MCP_URL, MCP_TOKEN = credentials()
 
 
+def mcp_call_with_powershell(body: bytes, timeout: int = 120):
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$headers = @{ 'Content-Type' = 'application/json'; 'Accept' = 'application/json' }
+if ($env:HF_MCP_TOKEN) { $headers['Authorization'] = 'Bearer ' + $env:HF_MCP_TOKEN }
+$body = [Console]::In.ReadToEnd()
+$response = Invoke-RestMethod -Method Post -Uri $env:HF_MCP_URL -Headers $headers -Body $body -TimeoutSec ([int]$env:HF_MCP_TIMEOUT)
+$response | ConvertTo-Json -Depth 100 -Compress
+"""
+    env = os.environ.copy()
+    env["HF_MCP_URL"] = MCP_URL
+    env["HF_MCP_TOKEN"] = MCP_TOKEN or ""
+    env["HF_MCP_TIMEOUT"] = str(timeout)
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        input=body.decode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=timeout + 20,
+    )
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout or "PowerShell MCP call failed").strip()
+        raise RuntimeError(detail)
+    return json.loads(completed.stdout)
+
+
+def mcp_call_with_extension_relay(body: bytes, timeout: int = 120):
+    relay_dir = DATA / "mcp-relay"
+    relay_dir.mkdir(parents=True, exist_ok=True)
+    request_id = uuid.uuid4().hex
+    request_file = relay_dir / f"{request_id}.request.json"
+    response_file = relay_dir / f"{request_id}.response.json"
+    request_payload = {
+        "id": request_id,
+        "url": MCP_URL,
+        "token": MCP_TOKEN or "",
+        "bodyBase64": base64.b64encode(body).decode("ascii"),
+        "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    temporary = relay_dir / f"{request_id}.request.tmp"
+    temporary.write_text(json.dumps(request_payload, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(request_file)
+    deadline = time.monotonic() + timeout + 45
+    while time.monotonic() < deadline:
+        if response_file.exists():
+            response = json.loads(response_file.read_text(encoding="utf-8"))
+            try:
+                request_file.unlink(missing_ok=True)
+                response_file.unlink(missing_ok=True)
+                (relay_dir / f"{request_id}.claimed").unlink(missing_ok=True)
+            except Exception:
+                pass
+            if not response.get("ok"):
+                raise RuntimeError(str(response.get("error") or "Chrome 连接器钉钉中继请求失败"))
+            return json.loads(str(response.get("bodyText") or "{}"))
+        time.sleep(0.25)
+    raise TimeoutError("Chrome 连接器钉钉中继请求超时，请确认连接器已重新加载并保持启用。")
+
+
 def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
     payload = {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": name, "arguments": arguments}, "id": 1}
     body = json.dumps(payload).encode("utf-8")
@@ -255,7 +329,17 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
             time.sleep(delay)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if attempt >= attempts:
-                raise
+                try:
+                    print(f"钉钉接口 {name} urllib 连接失败，切换 PowerShell 通道重试…", flush=True)
+                    result = mcp_call_with_powershell(body, timeout)
+                    break
+                except Exception as relay_reason:
+                    try:
+                        print(f"钉钉接口 {name} PowerShell 也无法访问，切换 Chrome 连接器中继…", flush=True)
+                        result = mcp_call_with_extension_relay(body, timeout)
+                        break
+                    except Exception:
+                        raise relay_reason
             delay = 1.5 * attempt
             print(f"钉钉接口 {name} 连接波动（{exc}），{delay:.1f} 秒后重试 {attempt + 1}/{attempts}…", flush=True)
             time.sleep(delay)
@@ -273,11 +357,33 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
     return result.get("result", {})
 
 
+def cached_sheet_ids() -> dict[str, str]:
+    try:
+        state = json.loads(STYLE_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    cached: dict[str, str] = {}
+    if isinstance(state, dict):
+        for name, value in state.items():
+            if isinstance(value, dict) and value.get("sheetId"):
+                cached[str(name)] = str(value["sheetId"])
+    return cached
+
+
 def load_sheet_ids(refresh: bool = False) -> dict[str, str]:
     """Read the workbook directory once per run instead of once per sheet."""
     if SHEET_IDS and not refresh:
         return SHEET_IDS
-    listing = mcp_call("get_all_sheets", {"nodeId": WORKBOOK})
+    try:
+        listing = mcp_call("get_all_sheets", {"nodeId": WORKBOOK})
+    except Exception:
+        cached = cached_sheet_ids()
+        if cached:
+            print("钉钉子表列表读取失败，使用本地 sheetId 缓存继续写入…", flush=True)
+            SHEET_IDS.clear()
+            SHEET_IDS.update(cached)
+            return SHEET_IDS
+        raise
 
     def sheet_list(value):
         if isinstance(value, list) and (not value or all(isinstance(item, dict) for item in value)):
@@ -298,6 +404,7 @@ def load_sheet_ids(refresh: bool = False) -> dict[str, str]:
     sheets = sheet_list(listing) or []
     SHEET_IDS.clear()
     SHEET_IDS.update({str(sheet.get("name") or ""): str(sheet.get("sheetId") or sheet.get("id") or sheet.get("name") or "") for sheet in sheets})
+    SHEET_IDS.update({name: sheet_id for name, sheet_id in cached_sheet_ids().items() if name and sheet_id and name not in SHEET_IDS})
     return SHEET_IDS
 
 
@@ -446,47 +553,182 @@ def style_overview_sheet(sheet_id: str, table: dict, initialize_layout: bool = T
     row_count = len(table.get("data", []))
     if not row_count:
         return
+    columns = list(table.get("columns", []))
+    col_count = max(1, len(columns))
+    end_col = col_letter(col_count - 1)
     end_row = row_count + 1
     matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
     try:
         if initialize_layout:
             mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2})
             mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
-            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": "A1:P1",
-                     "backgroundColors": matrix(1, 16, "#173F5F"), "fontColors": matrix(1, 16, "#FFFFFF"),
-                     "fontWeights": matrix(1, 16, "bold"), "fontSizes": matrix(1, 16, 12),
-                     "horizontalAlignments": matrix(1, 16, "center"), "verticalAlignments": matrix(1, 16, "middle"), "wordWrap": "autoWrap"})
+            try:
+                mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
+            except Exception:
+                pass
+            mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A1:{end_col}{end_row}"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A1:{end_col}1",
+                     "backgroundColors": matrix(1, col_count, "#173F5F"), "fontColors": matrix(1, col_count, "#FFFFFF"),
+                     "fontWeights": matrix(1, col_count, "bold"), "fontSizes": matrix(1, col_count, 12),
+                     "horizontalAlignments": matrix(1, col_count, "center"), "verticalAlignments": matrix(1, col_count, "middle"), "wordWrap": "autoWrap"})
         term_colors = ["#EAF3F8", "#EDF6E8", "#FFF1E6", "#F1EDFA"]
         terms = []
         body_backgrounds, body_fonts, body_weights, body_alignments = [], [], [], []
+        warning_index = columns.index("同期异常") if "同期异常" in columns else -1
         for row in table["data"]:
             term = str(row[0])
             if term not in terms:
                 terms.append(term)
             color = term_colors[terms.index(term) % len(term_colors)]
-            normal = str(row[14] or "") == "正常"
-            body_backgrounds.append([color, color, color, "#FFF6DF", "#E6F1F7", "#E6F1F7", "#E6F1F7",
-                                     "#E9F4E7", "#E9F4E7", "#E9F4E7", "#FCE8E6", "#FFF0E4",
-                                     "#F1EDFA", "#FFF6DF", "#E8F7F2" if normal else "#FADBD8", "#FFFFFF"])
-            body_fonts.append(["#233746"] * 14 + ["#116F5E" if normal else "#A3322E", "#233746"])
-            body_weights.append(["bold", "bold", "bold"] + ["normal"] * 11 + ["bold", "normal"])
-            body_alignments.append(["center"] * 14 + ["left", "center"])
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:P{end_row}",
+            normal = warning_index < 0 or str(row[warning_index] or "") == "正常"
+            backgrounds, fonts, weights, alignments = [], [], [], []
+            for column in columns:
+                if column in {"主课期", "老师", "班级数"}:
+                    fill = color
+                elif column == "到课率":
+                    fill = "#FFF6DF"
+                elif column == "直播上座率":
+                    fill = "#E6F1F7"
+                elif column == "偶数课完课率":
+                    fill = "#E9F4E7"
+                elif column in {"未完课", "未准时参播", "观看回放", "到课未完课"}:
+                    fill = {"未完课": "#FCE8E6", "未准时参播": "#FFF0E4", "观看回放": "#F1EDFA", "到课未完课": "#FFF6DF"}[column]
+                elif column == "同期异常":
+                    fill = "#E8F7F2" if normal else "#FADBD8"
+                else:
+                    fill = "#FFFFFF"
+                backgrounds.append(fill)
+                fonts.append("#116F5E" if column == "同期异常" and normal else "#A3322E" if column == "同期异常" else "#233746")
+                weights.append("bold" if column in {"主课期", "老师", "班级数", "同期异常"} else "normal")
+                alignments.append("left" if column == "同期异常" else "center")
+            body_backgrounds.append(backgrounds)
+            body_fonts.append(fonts)
+            body_weights.append(weights)
+            body_alignments.append(alignments)
+        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:{end_col}{end_row}",
                  "backgroundColors": body_backgrounds, "fontColors": body_fonts, "fontWeights": body_weights,
-                 "fontSizes": matrix(row_count, 16, 11), "horizontalAlignments": body_alignments,
-                 "verticalAlignments": matrix(row_count, 16, "middle"), "wordWrap": "autoWrap"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"D2:J{end_row}", "numberFormat": "0.0%"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"C2:C{end_row}", "numberFormat": "#,##0"})
-        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"K2:N{end_row}", "numberFormat": "#,##0"})
+                  "fontSizes": matrix(row_count, col_count, 11), "horizontalAlignments": body_alignments,
+                  "verticalAlignments": matrix(row_count, col_count, "middle"), "wordWrap": "autoWrap"})
+        for index, column in enumerate(columns):
+            letter = col_letter(index)
+            if column in {"到课率", "直播上座率", "偶数课完课率", "IM 3分钟回复率", "企微2小时回复率"}:
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{letter}2:{letter}{end_row}", "numberFormat": "0.0%"})
+            elif column in {"班级数", "未完课", "未准时参播", "观看回放", "到课未完课"}:
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{letter}2:{letter}{end_row}", "numberFormat": "#,##0"})
         if initialize_layout:
-            dimensions = [("ROWS", "1", 1, 52), ("ROWS", "2", row_count, 38),
-                          ("COLUMNS", "A", 1, 88), ("COLUMNS", "B", 1, 96), ("COLUMNS", "C", 1, 72),
-                          ("COLUMNS", "D", 7, 98), ("COLUMNS", "K", 4, 92), ("COLUMNS", "O", 1, 320), ("COLUMNS", "P", 1, 180)]
+            width_by_name = {"主课期": 120, "老师": 96, "班级数": 72, "同期异常": 320, "统计周期": 150, "教学服务更新时间": 170}
+            dimensions = [("ROWS", "1", 1, 52), ("ROWS", "2", row_count, 38)]
+            dimensions.extend(("COLUMNS", col_letter(index), 1, width_by_name.get(column, 104)) for index, column in enumerate(columns))
             for dimension, start, length, size in dimensions:
                 mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
                          "startIndex": start, "length": length, "pixelSize": size})
     except Exception as exc:
         print(f"组内概览样式更新警告：{exc}", flush=True)
+
+
+def style_overview_total_sheet(sheet_id: str, table: dict, initialize_layout: bool = True) -> None:
+    """Style the console total-board export as a scannable table."""
+    row_count = len(table.get("data", []))
+    if not row_count:
+        return
+    columns = list(table.get("columns", []))
+    col_count = max(1, len(columns))
+    end_col = col_letter(col_count - 1)
+    end_row = row_count + 1
+    matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
+    try:
+        if initialize_layout:
+            mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 2})
+            mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
+            try:
+                mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
+            except Exception:
+                pass
+            mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A1:{end_col}{end_row}"})
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A1:{end_col}1",
+                     "backgroundColors": matrix(1, col_count, "#173F5F"), "fontColors": matrix(1, col_count, "#FFFFFF"),
+                     "fontWeights": matrix(1, col_count, "bold"), "fontSizes": matrix(1, col_count, 12),
+                     "horizontalAlignments": matrix(1, col_count, "center"), "verticalAlignments": matrix(1, col_count, "middle"), "wordWrap": "autoWrap"})
+        backgrounds, font_colors, font_weights, alignments = [], [], [], []
+        fills = {
+            "课期": "#EAF3F8", "老师": "#EAF3F8", "最近开课": "#EAF3F8",
+            "第一节课到课率": "#FFF6DF", "第一节课到课": "#FFF6DF",
+            "准时直播上座率": "#E6F1F7", "同期直播均值": "#E6F1F7", "直播Gap": "#E6F1F7", "准时直播": "#E6F1F7",
+            "偶数课完课率": "#E9F4E7", "同期完课均值": "#E9F4E7", "完课Gap": "#E9F4E7", "偶数课完课": "#E9F4E7",
+            "今日IM电话接通率": "#EEF3FF", "IM电话接通/拨打": "#EEF3FF", "语音接通/拨打": "#EEF3FF", "视频接通/拨打": "#EEF3FF",
+            "今日新增补课": "#E8F7F2", "今日新增补课明细": "#E8F7F2",
+            "上周准时本周未到": "#FCE8E6", "上周准时本周未到明细": "#FCE8E6",
+            "上周未到本周准时": "#E8F7F2", "上周未到本周准时明细": "#E8F7F2",
+            "未完课学员": "#FCE8E6", "未准时参播": "#FFF0E4", "观看回放": "#F1EDFA", "到课未完课": "#FFF6DF",
+        }
+        detail_columns = {"今日新增补课明细", "上周准时本周未到明细", "上周未到本周准时明细"}
+        def gap_style(value, default_fill: str) -> tuple[str, str, str]:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return default_fill, "#233746", "normal"
+            if number >= 0.05:
+                return "#DDF4EA", "#08745E", "bold"
+            if number <= -0.05:
+                return "#FADBD8", "#A3322E", "bold"
+            return default_fill, "#233746", "normal"
+        for row_index, row in enumerate(table.get("data", [])):
+            row_fills, row_fonts, row_weights = [], [], []
+            for col_index, column in enumerate(columns):
+                default_fill = fills.get(column, "#F7FAFB" if row_index % 2 else "#FFFFFF")
+                if column in {"直播Gap", "完课Gap"}:
+                    fill, font, weight = gap_style(row[col_index] if col_index < len(row) else None, default_fill)
+                else:
+                    fill, font, weight = default_fill, "#233746", "normal"
+                row_fills.append(fill)
+                row_fonts.append(font)
+                row_weights.append(weight)
+            backgrounds.append(row_fills)
+            font_colors.append(row_fonts)
+            font_weights.append(row_weights)
+            alignments.append(["left" if column in {"课期", "老师", "最近开课"} or column in detail_columns else "center" for column in columns])
+        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A2:{end_col}{end_row}",
+                 "backgroundColors": backgrounds, "fontColors": font_colors, "fontWeights": font_weights,
+                 "fontSizes": matrix(row_count, col_count, 11), "horizontalAlignments": alignments,
+                 "verticalAlignments": matrix(row_count, col_count, "middle"), "wordWrap": "autoWrap"})
+        for index, column in enumerate(columns):
+            letter = col_letter(index)
+            if column in {"第一节课到课率", "准时直播上座率", "同期直播均值", "直播Gap", "偶数课完课率", "同期完课均值", "完课Gap", "今日IM电话接通率"}:
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{letter}2:{letter}{end_row}", "numberFormat": "0.0%"})
+            elif column in {"今日新增补课", "上周准时本周未到", "上周未到本周准时", "未完课学员", "未准时参播", "观看回放", "到课未完课"}:
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{letter}2:{letter}{end_row}", "numberFormat": "#,##0"})
+        for index, column in enumerate(columns):
+            if column not in detail_columns:
+                continue
+            letter = col_letter(index)
+            mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"{letter}2:{letter}{end_row}",
+                     "horizontalAlignments": matrix(row_count, 1, "left"), "wordWrap": "autoWrap"})
+        if initialize_layout:
+            width_by_name = {
+                "课期": 120, "老师": 96, "最近开课": 126, "统计周期": 110,
+                "第一节课到课率": 116, "准时直播上座率": 122, "偶数课完课率": 122, "今日IM电话接通率": 128,
+                "第一节课到课": 104, "准时直播": 104, "偶数课完课": 104,
+                "同期直播均值": 112, "同期完课均值": 112, "直播Gap": 92, "完课Gap": 92,
+                "IM电话接通/拨打": 124, "语音接通/拨打": 112, "视频接通/拨打": 112,
+                "今日新增补课明细": 320, "上周准时本周未到明细": 260, "上周未到本周准时明细": 260,
+                "上周准时本周未到": 112, "上周未到本周准时": 112,
+            }
+            for index, column in enumerate(columns):
+                mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "COLUMNS",
+                         "startIndex": col_letter(index), "length": 1, "pixelSize": width_by_name.get(column, 96)})
+            mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "ROWS",
+                     "startIndex": "1", "length": 1, "pixelSize": 48})
+        else:
+            width_by_name = {"今日新增补课明细": 320, "上周准时本周未到明细": 260, "上周未到本周准时明细": 260}
+            for index, column in enumerate(columns):
+                if column in width_by_name:
+                    mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "COLUMNS",
+                             "startIndex": col_letter(index), "length": 1, "pixelSize": width_by_name[column]})
+        if row_count:
+            mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "ROWS",
+                     "startIndex": "2", "length": row_count, "pixelSize": 58})
+    except Exception as exc:
+        print(f"组内教学总看板样式更新警告：{exc}", flush=True)
 
 
 def style_recommended_scripts_sheet(sheet_id: str, table: dict) -> None:
@@ -557,6 +799,67 @@ def style_consecutive_incomplete_sheet(sheet_id: str, table: dict) -> None:
                          "startIndex": start, "length": length, "pixelSize": size})
     except Exception as exc:
         print(f"连续2周及以上未完课样式更新警告：{exc}", flush=True)
+
+
+def style_cohort_exception_sheet(sheet_id: str, table: dict, initialize_layout: bool = True) -> None:
+    """Style the filterable learner-level week-over-week cohort exception sheet."""
+    row_count = len(table.get("data", []))
+    end_row = max(1, row_count + 1)
+    column_count = len(table.get("columns", []))
+    end_col = col_letter(column_count - 1)
+    matrix = lambda rows, cols, value: [[value] * cols for _ in range(rows)]
+    try:
+        mcp_call("update_sheet", {"nodeId": WORKBOOK, "sheetId": sheet_id, "frozenRowCount": 1, "frozenColumnCount": 5, "tabColor": "#78A9C5"})
+        mcp_call("set_gridline_visibility", {"nodeId": WORKBOOK, "sheetId": sheet_id, "visibility": "hidden"})
+        try:
+            mcp_call("delete_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id})
+        except Exception:
+            pass
+        mcp_call("create_filter", {"nodeId": WORKBOOK, "sheetId": sheet_id, "range": f"A1:{end_col}{end_row}"})
+        mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A1:{end_col}1",
+                 "backgroundColors": matrix(1, column_count, "#173F5F"), "fontColors": matrix(1, column_count, "#FFFFFF"),
+                 "fontWeights": matrix(1, column_count, "bold"), "fontSizes": matrix(1, column_count, 10),
+                 "horizontalAlignments": matrix(1, column_count, "center"), "verticalAlignments": matrix(1, column_count, "middle"), "wordWrap": "autoWrap"})
+        if row_count:
+            cohort_colors = ["#EAF3F8", "#EDF6E8", "#FFF1E6", "#F1EDFA"]
+            cohorts = []
+            fills, fonts, weights = [], [], []
+            for row in table.get("data", []):
+                cohort = str(row[0] or "")
+                if cohort not in cohorts:
+                    cohorts.append(cohort)
+                cohort_fill = cohort_colors[cohorts.index(cohort) % len(cohort_colors)]
+                down = str(row[2] or "").startswith("上周准时参播")
+                status_fill = "#FCE8E6" if down else "#E8F7F2"
+                status_font = "#A3322E" if down else "#116F5E"
+                fills.append([cohort_fill] * 5 + [status_fill] * 2 + ["#F5F7F9"] + ["#E6F1F7"] * 7 + ["#E9F4E7"] * 7 + ["#F5F7F9"] * 2)
+                fonts.append(["#233746", "#233746", status_font, "#233746", "#233746"] + [status_font] * 2 + ["#233746"] * 17)
+                weights.append(["bold", "bold", "bold"] + ["normal"] * 21)
+            for offset in range(0, row_count, 900):
+                chunk_rows = min(900, row_count - offset)
+                first_row = 2 + offset
+                last_row = first_row + chunk_rows - 1
+                mcp_call("update_range", {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{first_row}:{end_col}{last_row}",
+                         "backgroundColors": fills[offset:offset + chunk_rows], "fontColors": fonts[offset:offset + chunk_rows],
+                         "fontWeights": weights[offset:offset + chunk_rows], "fontSizes": matrix(chunk_rows, column_count, 9),
+                         "horizontalAlignments": matrix(chunk_rows, column_count, "center"),
+                         "verticalAlignments": matrix(chunk_rows, column_count, "middle"), "wordWrap": "autoWrap"})
+        if initialize_layout:
+            dimensions = [
+                ("ROWS", "1", 1, 56), ("COLUMNS", "A", 1, 145), ("COLUMNS", "B", 1, 105),
+                ("COLUMNS", "C", 1, 230), ("COLUMNS", "D", 1, 135), ("COLUMNS", "E", 1, 130),
+                ("COLUMNS", "F", 2, 125), ("COLUMNS", "H", 1, 125), ("COLUMNS", "I", 3, 115),
+                ("COLUMNS", "L", 4, 105), ("COLUMNS", "P", 3, 105), ("COLUMNS", "S", 4, 100),
+                ("COLUMNS", "W", 2, 145),
+            ]
+            for dimension, start, length, size in dimensions:
+                mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": dimension,
+                         "startIndex": start, "length": length, "pixelSize": size})
+        if row_count:
+            mcp_call("update_dimension", {"nodeId": WORKBOOK, "sheetId": sheet_id, "dimension": "ROWS",
+                     "startIndex": "2", "length": row_count, "pixelSize": 34})
+    except Exception as exc:
+        print(f"课期异常样式更新警告：{exc}", flush=True)
 
 
 def style_abnormal_sheet(sheet_id: str, table: dict, layout: dict, initialize_layout: bool = True) -> None:
@@ -757,12 +1060,16 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
             print(f"{name} 更新时间单元格写入警告：{exc}", flush=True)
     if name == "组内概览":
         style_overview_sheet(sheet_id, table, initialize_layout)
+    elif name == OVERVIEW_TOTAL_SHEET_NAME:
+        style_overview_total_sheet(sheet_id, table, initialize_layout)
     elif name == "异常学员":
         style_abnormal_sheet(sheet_id, table, layout, initialize_layout)
     elif name == "推荐话术":
         style_recommended_scripts_sheet(sheet_id, table)
     elif name == "连续2周及以上未完课":
         style_consecutive_incomplete_sheet(sheet_id, table)
+    elif name == "课期异常":
+        style_cohort_exception_sheet(sheet_id, table, initialize_layout)
     mark_style_layout_initialized(name, str(sheet_id))
     return len(table.get("data", []))
 
@@ -791,8 +1098,8 @@ def run(from_raw: bool = False) -> None:
         set_status("running", f"正在快速获取 {len(pairs)} 个班级的本周与对比周数据…")
         fetch_script = SKILL / "scripts" / "fetch_group_lessons.mjs"
         fetch_source = fetch_script.read_text(encoding="utf-8")
-        if "windowStart=monday.getTime()/1000-14*86400" not in fetch_source:
-            raise RuntimeError("教学数据采集脚本版本过旧：缺少上上周同期窗口，已停止以避免生成空 Gap。")
+        if "windowStart=monday.getTime()/1000-21*86400" not in fetch_source:
+            raise RuntimeError("教学数据采集脚本版本过旧：缺少三周同期窗口，已停止以避免生成空 Gap。")
         fetch = subprocess.run(
             [str(NODE), str(fetch_script), "9222", str(DATA / "classes.json"), str(DATA / "group-lessons-raw.json"), "0", "0", "2"],
             cwd=SKILL / "scripts", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -830,6 +1137,8 @@ def run(from_raw: bool = False) -> None:
     }
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
+    snapshot = json.loads((ROOT / "dashboard-snapshot.json").read_text(encoding="utf-8"))
+    tables[OVERVIEW_TOTAL_SHEET_NAME] = build_overview_total_table(snapshot)
     # Stop syncing retired views while preserving existing workbook sheets.
     for disabled_name in DISABLED_SHEETS:
         tables.pop(disabled_name, None)
@@ -851,6 +1160,29 @@ def run(from_raw: bool = False) -> None:
     elapsed = int(time.monotonic() - started)
     print("各子表耗时：" + "；".join(f"{name} {seconds:.1f}秒" for name, seconds in timings.items()), flush=True)
     set_status("success", f"组内教学数据更新完成（{elapsed // 60} 分 {elapsed % 60} 秒）。", detail)
+
+
+def write_overview_total_only() -> None:
+    """Write only the console total-board export into DingTalk."""
+    global RUN_STARTED_AT
+    RUN_STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S")
+    started = time.monotonic()
+    set_status("running", f"正在写入钉钉子表：{OVERVIEW_TOTAL_SHEET_NAME}…")
+    if not (ROOT / "dashboard-snapshot.json").exists():
+        snapshot_build = subprocess.run(
+            [sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+        )
+        if snapshot_build.returncode:
+            lines = [line.strip() for line in snapshot_build.stdout.splitlines() if line.strip()]
+            message = lines[-1].removeprefix("RuntimeError: ") if lines else "教学总看板快照生成失败。"
+            raise RuntimeError(message)
+    snapshot = json.loads((ROOT / "dashboard-snapshot.json").read_text(encoding="utf-8"))
+    table = build_overview_total_table(snapshot)
+    count = write_sheet(OVERVIEW_TOTAL_SHEET_NAME, table, RUN_STARTED_AT)
+    elapsed = int(time.monotonic() - started)
+    print(f"{OVERVIEW_TOTAL_SHEET_NAME} 写入完成：{count} 行，耗时 {elapsed} 秒", flush=True)
+    set_status("success", f"{OVERVIEW_TOTAL_SHEET_NAME} 已写入完课展示。", f"{count} 行")
 
 
 def acquire_update_lock():
@@ -875,7 +1207,10 @@ if __name__ == "__main__":
         print("已有一轮更新正在运行，本次重复请求已忽略。")
         raise SystemExit(0)
     try:
-        run("--from-raw" in sys.argv)
+        if "--overview-total-only" in sys.argv:
+            write_overview_total_only()
+        else:
+            run("--from-raw" in sys.argv)
     except Exception as error:
         set_status("error", "更新失败。", str(error))
         raise

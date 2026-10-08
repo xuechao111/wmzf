@@ -25,6 +25,22 @@ function delta(value,baseline){return value==null||baseline==null?"—":`${value
 function composite(row){const values=[row.im,row.wecom].filter(value=>value!=null&&Number.isFinite(value));return values.length?average(values):null;}
 function teacherStatus(row,imAverage,wecomAverage){if(row.im==null||row.wecom==null)return "数据待补充";const imGood=row.im>=imAverage,wecomGood=row.wecom>=wecomAverage;if(imGood&&wecomGood)return "双项领先";if(!imGood&&!wecomGood)return "双项待提升";return imGood?"企微待提升":"IM待提升";}
 const colorMatrix=(rows,cols,color)=>Array.from({length:rows},()=>Array(cols).fill(color));
+const serviceNumber=value=>value!==null&&value!==undefined&&value!==""&&Number.isFinite(Number(value))?Number(value):null;
+function serviceCallMetrics(source){
+  const voiceDial=serviceNumber(source.voiceDialStudents)??serviceNumber(source.voiceDialUsers)??serviceNumber(source.voiceDialCount);
+  const videoDial=serviceNumber(source.videoDialStudents)??serviceNumber(source.videoDialUsers)??serviceNumber(source.videoDialCount);
+  const videoConnected=serviceNumber(source.videoCallUsers)??serviceNumber(source.videoConnectedCount);
+  const totalConnected=serviceNumber(source.callConnectedCount)??serviceNumber(source.callUsers);
+  let voiceConnected=serviceNumber(source.voiceCallUsers)??serviceNumber(source.voiceConnectedCount);
+  if(totalConnected!=null&&videoConnected!=null)voiceConnected=Math.max(0,totalConnected-videoConnected);
+  else if(voiceConnected==null&&totalConnected!=null)voiceConnected=totalConnected;
+  const dialTotal=(voiceDial??0)+(videoDial??0),connectedTotal=totalConnected??((voiceConnected??0)+(videoConnected??0));
+  return {voiceDial,videoDial,voiceConnected,videoConnected,dialTotal,connectedTotal,connectRate:dialTotal?connectedTotal/dialTotal*100:null,voiceConnectRate:voiceDial&&voiceConnected!=null?voiceConnected/voiceDial*100:serviceNumber(source.voiceConnectRate),videoConnectRate:videoDial&&videoConnected!=null?videoConnected/videoDial*100:serviceNumber(source.videoConnectRate)};
+}
+function serviceCallFields(item){
+  const calls=serviceCallMetrics(item);
+  return {callUsers:item.callUsers,callCoverage:item.callCoverage,callDialCount:calls.dialTotal,callConnectedCount:calls.connectedTotal,callConnectRate:calls.connectRate,voiceCallUsers:calls.voiceConnected,voiceDialCount:calls.voiceDial,voiceConnectedCount:calls.voiceConnected,voiceCallRate:item.voiceCallRate,voiceConnectRate:calls.voiceConnectRate,voiceUsageRate:item.voiceUsageRate,videoCallUsers:calls.videoConnected,videoCallCoverage:item.videoCallCoverage,videoDialCount:calls.videoDial,videoConnectedCount:calls.videoConnected,videoCallRate:item.videoCallRate,videoConnectRate:calls.videoConnectRate,videoUsageRate:item.videoUsageRate,videoAverageMinutes:item.videoAverageMinutes};
+}
 
 function summarize(table,metricNames,dimension){
   const headers=table.headers||[],rows=table.rows||[];
@@ -39,15 +55,15 @@ function summarize(table,metricNames,dimension){
 function buildServiceViews(serviceSource){
   if(!serviceSource)return {teachers:[],groups:[]};
   if(Array.isArray(serviceSource.teachers)&&Array.isArray(serviceSource.groups))return {teachers:serviceSource.teachers.filter(item=>item.老师!=="薛超"),groups:serviceSource.groups};
-  const imTeachers=summarize(serviceSource.im.teacher,["3分钟回复率","pre_teacher_3m_reply_cnt"],"teacher").filter(item=>item.name!=="薛超");
-  const wecomTeachers=summarize(serviceSource.wecom.teacher,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"teacher").filter(item=>item.name!=="薛超");
-  const imGroups=summarize(serviceSource.im.group,["3分钟回复率","pre_teacher_3m_reply_cnt"],"group");
-  const wecomGroups=summarize(serviceSource.wecom.group,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"group");
+  const imTeachers=serviceSource.im?.teacher?summarize(serviceSource.im.teacher,["3分钟回复率","pre_teacher_3m_reply_cnt"],"teacher").filter(item=>item.name!=="薛超"):[];
+  const wecomTeachers=serviceSource.wecom?.teacher?summarize(serviceSource.wecom.teacher,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"teacher").filter(item=>item.name!=="薛超"):[];
+  const imGroups=serviceSource.im?.group?summarize(serviceSource.im.group,["3分钟回复率","pre_teacher_3m_reply_cnt"],"group"):[];
+  const wecomGroups=serviceSource.wecom?.group?summarize(serviceSource.wecom.group,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"group"):[];
   const teacherMap=new Map();
-  for(const item of imTeachers)teacherMap.set(item.id||item.name,{工号:item.id,老师:item.name,小组:item.group,im:item.value,imAnswered:item.answered,imQuestions:item.questions,imUsers:item.imUsers,imEligibleStudents:item.imEligible,imUsage:item.imUsage,callUsers:item.callUsers,callCoverage:item.callCoverage,voiceDialCount:item.voiceDialCount,voiceConnectedCount:item.voiceConnectedCount,voiceCallRate:item.voiceCallRate,voiceConnectRate:item.voiceConnectRate,voiceUsageRate:item.voiceUsageRate,videoCallUsers:item.videoCallUsers,videoCallCoverage:item.videoCallCoverage,videoDialCount:item.videoDialCount,videoConnectedCount:item.videoConnectedCount,videoCallRate:item.videoCallRate,videoConnectRate:item.videoConnectRate,videoUsageRate:item.videoUsageRate,videoAverageMinutes:item.videoAverageMinutes,wecom:null});
+  for(const item of imTeachers)teacherMap.set(item.id||item.name,{工号:item.id,老师:item.name,小组:item.group,im:item.value,imAnswered:item.answered,imQuestions:item.questions,imUsers:item.imUsers,imEligibleStudents:item.imEligible,imUsage:item.imUsage,...serviceCallFields(item),wecom:null});
   for(const item of wecomTeachers){const key=item.id||item.name,old=teacherMap.get(key)||{工号:item.id,老师:item.name,小组:item.group,im:null,imAnswered:null,imQuestions:null};old.wecom=item.value;old.wecomAnswered=item.answered;old.wecomQuestions=item.questions;teacherMap.set(key,old);}
   const groupMap=new Map();
-  for(const item of imGroups)groupMap.set(item.name,{小组:item.name,im:item.value,imAnswered:item.answered,imQuestions:item.questions,imUsers:item.imUsers,imEligibleStudents:item.imEligible,imUsage:item.imUsage,callUsers:item.callUsers,callCoverage:item.callCoverage,voiceDialCount:item.voiceDialCount,voiceConnectedCount:item.voiceConnectedCount,voiceCallRate:item.voiceCallRate,voiceConnectRate:item.voiceConnectRate,voiceUsageRate:item.voiceUsageRate,videoCallUsers:item.videoCallUsers,videoCallCoverage:item.videoCallCoverage,videoDialCount:item.videoDialCount,videoConnectedCount:item.videoConnectedCount,videoCallRate:item.videoCallRate,videoConnectRate:item.videoConnectRate,videoUsageRate:item.videoUsageRate,videoAverageMinutes:item.videoAverageMinutes,wecom:null});
+  for(const item of imGroups)groupMap.set(item.name,{小组:item.name,im:item.value,imAnswered:item.answered,imQuestions:item.questions,imUsers:item.imUsers,imEligibleStudents:item.imEligible,imUsage:item.imUsage,...serviceCallFields(item),wecom:null});
   for(const item of wecomGroups){const old=groupMap.get(item.name)||{小组:item.name,im:null,imAnswered:null,imQuestions:null};old.wecom=item.value;old.wecomAnswered=item.answered;old.wecomQuestions=item.questions;groupMap.set(item.name,old);}
   return {teachers:[...teacherMap.values()],groups:[...groupMap.values()]};
 }
@@ -82,7 +98,7 @@ async function writeSheet(matrix,layout){const listing=await mcpCall("get_all_sh
   for(const [start,length,size] of [["1",1,38],["4",2,32],[String(layout.teacherSection),1,34],[String(layout.teacherHeader),1,42],[String(layout.groupSection),1,34],[String(layout.groupHeader),1,42]])await mcpCall("update_dimension",{nodeId:WORKBOOK,sheetId,dimension:"ROWS",startIndex:start,length,pixelSize:size});
   const verify=await mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A1:J${Math.min(matrix.length,10)}`});if(!JSON.stringify(verify).includes("教学服务数据")||!JSON.stringify(verify).includes("较组均值"))throw new Error("VERIFY_SERVICE_SHEET_FAILED");return sheetId;}
 
-async function main(){const input=process.argv[2],output=process.argv[3];if(!input||!fs.existsSync(input))throw new Error("CRM_SERVICE_INPUT_NOT_FOUND");const source=JSON.parse(fs.readFileSync(input,"utf8").replace(/^\uFEFF/,"")),dates=source.dates||[],requested=source.serviceSelection||{},serviceSelection={days:Array.isArray(requested.days)&&requested.days.length?requested.days.map(Number):[5,6,0],startHour:Number.isInteger(Number(requested.startHour))?Number(requested.startHour):14,endHour:Number.isInteger(Number(requested.endHour))?Number(requested.endHour):21},serviceTimeLabel=`${String(serviceSelection.startHour).padStart(2,"0")}:00–${String(serviceSelection.endHour).padStart(2,"0")}:00`;
+async function main(){const input=process.argv[2],output=process.argv[3];if(!input||!fs.existsSync(input))throw new Error("CRM_SERVICE_INPUT_NOT_FOUND");const source=JSON.parse(fs.readFileSync(input,"utf8").replace(/^\uFEFF/,"")),dates=source.dates||[],requested=source.serviceSelection||{},requestedDates=Array.isArray(requested.dates)?[...new Set(requested.dates.map(value=>String(value||"").trim()).filter(value=>/^\d{4}-\d{2}-\d{2}$/.test(value)))].sort():[],serviceSelection={days:Array.isArray(requested.days)&&requested.days.length?requested.days.map(Number):[5,6,0],dates:requestedDates,dateSource:requestedDates.length?String(requested.dateSource||"explicitDates"):"weekdaySelection",openedWeek:String(requested.openedWeek||""),startHour:Number.isInteger(Number(requested.startHour))?Number(requested.startHour):14,endHour:Number.isInteger(Number(requested.endHour))?Number(requested.endHour):21},serviceTimeLabel=`${String(serviceSelection.startHour).padStart(2,"0")}:00–${String(serviceSelection.endHour).padStart(2,"0")}:00`;
   validateServiceSummaryTables(source);
   const debugTable=table=>({chart:table?.chartName,headers:table?.headers,granular:table?.granular,countsDerived:Boolean(table?.countsDerived),resolvedColumns:table?.resolvedColumns||{},availableColumns:table?.availableColumns||[],candidateAttempts:table?.candidateAttempts||[]});
   const debugFile=output.replace(/service-data\.json$/,"service-debug.json");fs.writeFileSync(debugFile,JSON.stringify({dates,serviceSelection,todayDates:source.today?.dates||[],imTeacher:debugTable(source.im?.teacher),imGroup:debugTable(source.im?.group),wecomTeacher:debugTable(source.wecom?.teacher),wecomGroup:debugTable(source.wecom?.group),todayImTeacher:debugTable(source.today?.im?.teacher),todayWecomTeacher:debugTable(source.today?.wecom?.teacher)},null,2),"utf8");

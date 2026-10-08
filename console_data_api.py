@@ -10,12 +10,18 @@ GROUP = ROOT / "run-data" / "group-dashboard-tables.json"
 EXCEPTION = ROOT / "run-data" / "exception-export-tables.json"
 SNAPSHOT = ROOT / "dashboard-snapshot.json"
 CONFIG = ROOT / "dashboard-config.json"
+OVERVIEW_TABLE = "组内概览"
 LIVE_TABLE = "班级直播上座"
 LIVE_EXTRA_COLUMNS = ["课期", "较上周对应时段准时直播 Gap"]
+COHORT_FILTER_COLUMNS = {OVERVIEW_TABLE: "主课期", "班级直播上座": "课期", "课期异常": "课期"}
+HIDDEN_COLUMNS = {
+    OVERVIEW_TABLE: {"同期直播均值", "直播差值", "同期完课均值", "完课差值"},
+}
 LABELS = {
     "组内概览": "核心指标与同期异常",
     "班级课次看板": "各班当周课次表现",
     "班级直播上座": "三班型直播参播",
+    "课期异常": "周环比准时参播变化学员与老师关键数据",
     "异常学员": "异常分层跟进名单",
     "推荐话术": "按异常类别生成的三种跟进风格",
     "未准时参播学员": "直播未准时参播明细",
@@ -58,22 +64,52 @@ def class_key(value: object) -> str:
 
 def prepare_table(name: str, table: dict, snapshot: dict) -> dict:
     """Add console-only fields without mutating the workbook export or its metrics."""
-    if name != LIVE_TABLE:
-        return {"columns": list(table.get("columns", [])), "data": [list(row) for row in table.get("data", [])]}
-
     columns = list(table.get("columns", []))
-    class_id_index = columns.index("班级ID") if "班级ID" in columns else -1
-    class_rows = {class_key(row.get("classId")): row for row in snapshot.get("classes", [])}
-    rows = []
-    for source_row in table.get("data", []):
-        row = list(source_row)
-        class_row = class_rows.get(class_key(row[class_id_index])) if class_id_index >= 0 else None
-        row.extend([
-            class_row.get("cohort", "") if class_row else "",
-            class_row.get("liveDelta") if class_row else None,
-        ])
-        rows.append(row)
-    return {"columns": columns + LIVE_EXTRA_COLUMNS, "data": rows}
+    rows = [list(row) for row in table.get("data", [])]
+    if name == OVERVIEW_TABLE and columns:
+        teacher_index = columns.index("老师") if "老师" in columns else -1
+        period_index = columns.index("统计周期") if "统计周期" in columns else -1
+        live_index = columns.index("直播上座率") if "直播上座率" in columns else -1
+        finish_index = columns.index("偶数课完课率") if "偶数课完课率" in columns else -1
+        cohort_lookup = {}
+        for item in snapshot.get("rows", []):
+            key = (
+                str(item.get("teacher") or ""),
+                str(item.get("currentWeek") or ""),
+                round(float(item.get("current", {}).get("liveRate") or 0), 10),
+                round(float(item.get("current", {}).get("finishRate") or 0), 10),
+            )
+            cohort_lookup[key] = str(item.get("cohort") or "")
+        for row in rows:
+            if not row:
+                continue
+            current = str(row[0] or "")
+            if "周" in current or teacher_index < 0:
+                continue
+            key = (
+                str(row[teacher_index] if len(row) > teacher_index else ""),
+                str(row[period_index] if period_index >= 0 and len(row) > period_index else ""),
+                round(float(row[live_index] if live_index >= 0 and len(row) > live_index and row[live_index] not in (None, "") else 0), 10),
+                round(float(row[finish_index] if finish_index >= 0 and len(row) > finish_index and row[finish_index] not in (None, "") else 0), 10),
+            )
+            row[0] = cohort_lookup.get(key) or current
+    if name == LIVE_TABLE:
+        class_id_index = columns.index("班级ID") if "班级ID" in columns else -1
+        class_rows = {class_key(row.get("classId")): row for row in snapshot.get("classes", [])}
+        for row in rows:
+            class_row = class_rows.get(class_key(row[class_id_index])) if class_id_index >= 0 else None
+            row.extend([
+                class_row.get("cohort", "") if class_row else "",
+                class_row.get("liveDelta") if class_row else None,
+            ])
+        columns = columns + LIVE_EXTRA_COLUMNS
+    hidden = HIDDEN_COLUMNS.get(name, set())
+    if hidden:
+        keep = [index for index, column in enumerate(columns) if column not in hidden]
+        columns = [columns[index] for index in keep]
+        rows = [[row[index] if index < len(row) else "" for index in keep] for row in rows]
+    return {"columns": columns, "data": rows}
+
 
 
 def main() -> None:
@@ -138,8 +174,8 @@ def main() -> None:
         table = prepare_table(name, table, snapshot)
         rows = table.get("data", [])
         cohorts = []
-        if name == LIVE_TABLE:
-            cohort_index = table["columns"].index("课期")
+        if name in COHORT_FILTER_COLUMNS:
+            cohort_index = table["columns"].index(COHORT_FILTER_COLUMNS[name])
             cohorts = sorted({str(row[cohort_index]) for row in rows if row[cohort_index]}, reverse=True)
             if cohort != "all" and cohort in cohorts:
                 rows = [row for row in rows if str(row[cohort_index]) == cohort]
@@ -149,7 +185,7 @@ def main() -> None:
             rows = [row for row in rows if query in " ".join(str(v or "") for v in row).lower()]
         start = (page - 1) * size
         payload = {"name": name, "columns": table.get("columns", []), "rows": rows[start:start + size], "page": page, "size": size, "total": len(rows), "pages": max(1, (len(rows) + size - 1) // size)}
-        if name == LIVE_TABLE:
+        if name in COHORT_FILTER_COLUMNS:
             payload.update({"cohorts": cohorts, "cohort": cohort})
     out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 

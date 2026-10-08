@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "编程猫教学控制台连接器",
-  "version": "1.6.31",
+  "version": "1.6.37",
   "description": "让本地教学控制台使用当前Chrome中已登录的编程猫CRM页面。",
   "permissions": ["tabs", "scripting", "alarms", "storage"],
   "host_permissions": [
@@ -13,6 +13,7 @@
     "https://lbk-crm-teacher-web-api.codemao.cn/*",
     "https://api-codecamp-crm.codemao.cn/*",
     "https://cloud-gateway.codemao.cn/*",
+    "https://mcp-gw.dingtalk.com/*",
     "https://bigdata-superset.codemao.cn/*",
     "https://codecamp-marketing.codemao.cn/*"
   ],

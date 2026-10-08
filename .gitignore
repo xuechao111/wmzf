@@ -31,3 +31,9 @@ Thumbs.db
 runtime/
 *.exe
 *.zip
+
+# Private generated state
+dashboard-config.backup.json
+ai-feedback.json
+cohort-exception-classes.json
+startup-report.txt
