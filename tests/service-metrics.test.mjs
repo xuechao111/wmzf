@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {buildServiceViews,validateServiceSummaryTables} from "../sync-service-data.mjs";
+import {buildServiceViews,validateServiceSummaryTables,validateServiceGroup} from "../sync-service-data.mjs";
 
 const imHeaders=["worker_no","beisen_user_fullname","level_7_department_name","pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceConnectedCount","voiceConnectRate","videoCallUsers","videoCallCoverage","videoDialCount","videoConnectedCount","videoConnectRate"];
 const imRow={worker_no:"C18806",beisen_user_fullname:"阳鹏",level_7_department_name:"屹柯组",pre_teacher_3m_reply_cnt:"97.90%",im_answered_3m_count:48,im_question_count:49,im_user_count:14,im_eligible_student_count:36,im_usage_rate:38.9,callUsers:5,callCoverage:13.89,voiceDialCount:7,voiceConnectedCount:6,voiceConnectRate:85.71,videoCallUsers:2,videoCallCoverage:5.56,videoDialCount:3,videoConnectedCount:2,videoConnectRate:66.67};
@@ -51,3 +51,7 @@ assert.doesNotThrow(()=>validateServiceSummaryTables(aggregatedDetail));
 assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggregatedDetail.im,teacher:{...aggregatedDetail.im.teacher,granular:true,aggregation:"detail"}}}),/CRM_SERVICE_SUMMARY_REQUIRED/);
 assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggregatedDetail.im,teacher:{...aggregatedDetail.im.teacher,rows:[{...imRow,im_answered_3m_count:50,im_question_count:49}]}}}),/CRM_SERVICE_SUMMARY_COUNTS_INVALID/);
 console.log("SERVICE_METRICS_OK");
+
+assert.doesNotThrow(()=>validateServiceGroup({teachers:[{小组:"其他组",老师:"甲"}]},"其他组"));
+assert.throws(()=>validateServiceGroup({teachers:[{小组:"屹柯组",老师:"乙"}]},"其他组"),/CRM_SERVICE_GROUP_MISMATCH/);
+assert.throws(()=>validateServiceGroup({teachers:[]},""),/CRM_SERVICE_GROUP_NOT_CONFIGURED/);

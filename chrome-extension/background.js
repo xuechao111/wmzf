@@ -567,7 +567,12 @@ function serviceTodayDate(selection){
   return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 }
 
-async function fetchServiceInCurrentChrome(requestedSelection){
+async function fetchServiceInCurrentChrome(requestedSelection,localBase=LOCAL_BASE){
+  const response=await fetchWithTimeout(`${normalizeLocalBase(localBase)}/config`,{},5000);
+  if(!response.ok)throw new Error('工作台配置读取失败');
+  const config=await response.json();
+  const groupName=String(config.displayTitle||'').match(/([^·|｜\s]+组)/)?.[1]?.trim()||'';
+  if(!groupName)return {ok:false,error:'请在配置面板的工作台名称中填写 CRM 小组名称，例如：深圳战区 · 某某组。'};
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
@@ -575,8 +580,8 @@ async function fetchServiceInCurrentChrome(requestedSelection){
   try{
     await waitForTabReady(tab.id);
     const results=await Promise.race([chrome.scripting.executeScript({
-      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate,serviceSelection],
-      func:async(dates,todayDate,serviceSelection)=>{try{
+      target:{tabId:tab.id},world:"MAIN",args:[dates,todayDate,serviceSelection,groupName],
+      func:async(dates,todayDate,serviceSelection,groupName)=>{try{
         const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
         const api=async(url,options={})=>{
           let lastError;
@@ -620,7 +625,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
             const add=(column,value)=>{if(column&&value!=null&&(!Array.isArray(value)||value.length))baseDesired.push({col:column,op:"IN",val:Array.isArray(value)?value:[value]});};
             add(columns.date,filterDates);add(columns.zone,"AI C++教学部");
             if(kind==="wecom")add(columns.team,"深圳战区");else add(columns.department,["探月教学中心","深空教学中心"]);
-            if(dimension==="老师")add(columns.group,"屹柯组");
+            if(dimension==="老师"){if(!columns.group)throw new Error("CRM_SERVICE_GROUP_COLUMN_MISSING");add(columns.group,groupName);}
             const serviceHours=serviceSelection.hours;
             const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
             const execute=async extraFilters=>{const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col)||filter.op==="TEMPORAL_RANGE");item.filters.push(...desired);item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
@@ -851,7 +856,7 @@ async function runScheduledServiceUpdate(slotKey="manual",localBase=LOCAL_BASE){
   const detail=serviceSelection.dates?.length?`自动同步：统计 ${serviceSelection.dates.join("、")} 已开课日，每日 ${serviceSelection.label}`:`自动同步：统计 ${serviceSelection.dayLabel}，每日 ${serviceSelection.label}`;
   await postLocalJson("/service-client-status",{state:"running",runId,message:"自动更新正在读取当前Chrome中的IM与企微看板…",detail},5000,localBase);
   await appendRunLog("开始同步教学服务数据",`${slotKey} · ${detail}`,localBase);
-  const crm=await fetchServiceInCurrentChrome(serviceSelection);
+  const crm=await fetchServiceInCurrentChrome(serviceSelection,localBase);
   if(!crm?.ok||!crm?.data){
     const message=crm?.error||"CRM没有返回教学服务数据。";
     await postLocalJson("/service-client-status",{state:"error",runId,detail:message},5000,localBase).catch(()=>null);
@@ -1050,7 +1055,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message.type==="fetch-renewal"){fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
   if(message.type==="fetch-nct"){fetchNctInCurrentChrome(message.filters||{}).then(sendResponse);return true;}
   if(message.type==="fetch-service"){
-    fetchServiceInCurrentChrome(message.serviceSelection)
+    fetchServiceInCurrentChrome(message.serviceSelection,message.localBase)
       .then(result=>sendResponse(result||{ok:false,error:"教学服务采集没有返回结果，请重试。"}))
       .catch(error=>sendResponse({ok:false,error:`教学服务数据读取失败：${String(error?.message||error)}`}));
     return true;
