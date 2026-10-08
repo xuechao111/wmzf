@@ -695,7 +695,7 @@
           <aside class="right-stack">
             <section class="card status-card"><div class="card-title"><h2>更新状态</h2><span class="pill">LOCAL SCRIPT</span></div><div id="statusMessage" class="status-message">等待操作，当前可直接更新。</div></section>
             <section class="card dataset-card"><div class="card-title"><h2>现有看板</h2><span id="tableCount" class="pill">读取中</span></div><div id="datasetList" class="dataset-list"></div></section>
-            <section class="card links-card sidebar-links" aria-label="快捷入口"><button class="ghost" data-action="dashboard">打开钉钉</button><button class="ghost" data-action="crm">打开 CRM</button><button class="ghost" data-page="nct">NCT年卡</button><button id="configBtn" class="ghost">配置面板</button></section>
+            <section class="card links-card sidebar-links" aria-label="快捷入口"><button class="ghost" data-action="dashboard">打开钉钉</button><button class="ghost" data-action="crm">打开 CRM</button><button class="ghost" data-page="nct">NCT年卡</button><button id="configBtn" class="ghost">配置面板</button><button id="selfUpdateBtn" class="ghost" style="grid-column:1 / -1">一键更新工作台</button><span id="selfUpdateMessage" role="status" style="grid-column:1 / -1;font-size:12px;line-height:1.6"></span></section>
           </aside>
         </div>
       </section>
@@ -942,5 +942,27 @@
 </script>
 <script>
   (()=>{const button=document.querySelector('#aiSubmit');if(!button)return;button.onclick=async()=>{const status=document.querySelector('#aiStatus'),question=document.querySelector('#aiQuestion').value.trim();if(!question){status.textContent='请先输入问题';return}button.disabled=true;status.textContent='豆包正在读取看板并分析，通常需要 10–60 秒…';try{await json('/ai-ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question}),timeoutMs:135000});status.textContent='分析完成，反馈已写入“屹柯完课展示”';document.querySelector('#aiQuestion').value='';await json('/ai-feedback',{timeoutMs:15000}).then(data=>{const target=document.querySelector('#aiFeedbackTable');target.innerHTML=(data.rows||[]).length?`<table class="ai-table"><thead><tr><th>分析时间</th><th>问题</th><th>豆包反馈</th><th>模型</th></tr></thead><tbody>${data.rows.map(row=>`<tr><td>${esc(row.time)}</td><td>${esc(row.question)}</td><td><div class="ai-feedback-text">${esc(row.feedback)}</div></td><td>${esc(row.model)}</td></tr>`).join('')}</tbody></table>`:'<div class="ai-empty">暂无分析反馈</div>'})}catch(e){status.textContent=e.message}finally{button.disabled=false}}})();
+</script>
+<script>
+(()=>{
+  const button=document.querySelector('#selfUpdateBtn'),message=document.querySelector('#selfUpdateMessage');
+  let polling=false;
+  async function checkUpdate(){
+    if(!polling)return;
+    try{
+      const status=await json('/self-update-status');
+      message.textContent=[status.message,status.detail].filter(Boolean).join(' · ');
+      if(status.state==='success'){polling=false;message.textContent='工作台更新完成，正在重新连接…';setTimeout(()=>location.reload(),5000);return}
+      if(status.state==='error'){polling=false;button.disabled=false;button.textContent='重试更新工作台';return}
+    }catch{message.textContent='更新期间服务正在重启，正在重新连接…'}
+    setTimeout(checkUpdate,2000);
+  }
+  button.onclick=async()=>{
+    if(polling)return;
+    button.disabled=true;button.textContent='正在更新工作台…';message.textContent='正在下载程序更新，本机配置和数据会保留。';
+    try{await json('/self-update',{method:'POST',timeoutMs:15000});polling=true;checkUpdate()}
+    catch(error){button.disabled=false;button.textContent='重试更新工作台';message.textContent=error.message}
+  };
+})();
 </script>
 </body></html>
