@@ -455,7 +455,7 @@ async function fetchRenewalInCurrentChrome(renewalMonth){
           item.filters.push(...selectedFilters);item.row_limit=200000;item.row_offset=0;
         }
         query.force=true;query.form_data=query.form_data||{};
-        query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:selectedFilters};
+        if(dimension==="老师"){for(const key of ['adhoc_filters','filters']){if(Array.isArray(query.form_data[key]))query.form_data[key]=query.form_data[key].filter(f=>f.subject!==columns.group&&f.col!==columns.group&&!JSON.stringify(f).includes('屹柯组'));}}query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:selectedFilters};
         let csrf="";
         try{const tokenResponse=await fetch("/api/v1/security/csrf_token/",{credentials:"include"});if(tokenResponse.ok)csrf=(await tokenResponse.json()).result||"";}catch{}
         const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
@@ -571,7 +571,7 @@ async function fetchServiceInCurrentChrome(requestedSelection,localBase=LOCAL_BA
   const response=await fetchWithTimeout(`${normalizeLocalBase(localBase)}/config`,{},5000);
   if(!response.ok)throw new Error('工作台配置读取失败');
   const config=await response.json();
-  const groupName=String(config.displayTitle||'').match(/([^·|｜\s]+组)/)?.[1]?.trim()||'';
+  const groupName=String(config.groupName||config.serviceGroupName||'').trim()||String(config.displayTitle||'').split(/[·|｜]/).map(x=>x.trim()).filter(x=>x.endsWith('组')).at(-1)||'';
   if(!groupName)return {ok:false,error:'请在配置面板的工作台名称中填写 CRM 小组名称，例如：深圳战区 · 某某组。'};
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
@@ -628,7 +628,7 @@ async function fetchServiceInCurrentChrome(requestedSelection,localBase=LOCAL_BA
             if(dimension==="老师"){if(!columns.group)throw new Error("CRM_SERVICE_GROUP_COLUMN_MISSING");add(columns.group,groupName);}
             const serviceHours=serviceSelection.hours;
             const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
-            const execute=async extraFilters=>{const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col)||filter.op==="TEMPORAL_RANGE");item.filters.push(...desired);item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
+            const execute=async extraFilters=>{const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col)||filter.op==="TEMPORAL_RANGE");item.filters.push(...desired);if(dimension==="老师"){item.filters=item.filters.filter(f=>f.col===columns.group||!JSON.stringify(f).includes("屹柯组"));}item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};if(dimension==="老师"){for(const key of ['adhoc_filters','filters']){if(Array.isArray(query.form_data[key]))query.form_data[key]=query.form_data[key].filter(f=>f.subject!==columns.group&&f.col!==columns.group&&!JSON.stringify(f).includes('屹柯组'));}}query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
             let raw;
             if(kind==="wecom"&&!columns.hour&&columns.timeType){
               const variants=[["工作时间"],["工作时段"],serviceHours,serviceHours.map(x=>`${x}时`),serviceHours.map(x=>`${x}点`),serviceHours.map(x=>`${x}:00`),serviceHours.map(x=>`${x}:00-${x}:59`),serviceHours.map(x=>Number(x))];

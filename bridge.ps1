@@ -133,6 +133,7 @@ function Get-DashboardConfig {
         renewalSheetId = ''
         nctWorkbookUrl = ''
         serviceWorkbookUrl = ''
+        groupName = ''
         doubaoModelId = ''
         hasDoubaoApiKey = $false
         classes = @()
@@ -147,7 +148,7 @@ function Get-DashboardConfig {
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
+            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','groupName','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -218,6 +219,7 @@ function Save-DashboardConfig($bodyText) {
         renewalSheetId = ([string]$payload.renewalSheetId).Trim()
         nctWorkbookUrl = $nctWorkbook
         serviceWorkbookUrl = $serviceWorkbook
+        groupName = ([string]$payload.groupName).Trim()
         doubaoModelId = ([string]$payload.doubaoModelId).Trim()
         doubaoApiKey = $doubaoKey
         classes = $classes
