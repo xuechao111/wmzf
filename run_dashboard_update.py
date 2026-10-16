@@ -1103,7 +1103,7 @@ def run(from_raw: bool = False) -> None:
         fetch = subprocess.run(
             [str(NODE), str(fetch_script), "9222", str(DATA / "classes.json"), str(DATA / "group-lessons-raw.json"), "0", "0", "2"],
             cwd=SKILL / "scripts", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace"
+            text=True, encoding="utf-8", errors="replace"
         )
         if fetch.stdout:
             print(fetch.stdout, flush=True)
@@ -1120,7 +1120,7 @@ def run(from_raw: bool = False) -> None:
     dashboard = json.loads((DATA / "group-dashboard-tables.json").read_text(encoding="utf-8"))
     snapshot_build = subprocess.run(
         [sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace"
     )
     if snapshot_build.returncode:
         lines = [line.strip() for line in snapshot_build.stdout.splitlines() if line.strip()]
@@ -1171,7 +1171,7 @@ def write_overview_total_only() -> None:
     if not (ROOT / "dashboard-snapshot.json").exists():
         snapshot_build = subprocess.run(
             [sys.executable, str(SOURCE_ROOT / "get_dashboard_snapshot.py")], cwd=ROOT,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace"
         )
         if snapshot_build.returncode:
             lines = [line.strip() for line in snapshot_build.stdout.splitlines() if line.strip()]
