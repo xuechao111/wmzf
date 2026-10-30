@@ -1,6 +1,6 @@
 {
-  "version": "2026.10.30-v7",
-  "connectorVersion": "1.6.63",
+  "version": "2026.10.30-v8",
+  "connectorVersion": "1.6.64",
   "files": [
     {
       "path": "DESIGN.md",
@@ -36,7 +36,7 @@
     },
     {
       "path": "chrome-extension/background.js",
-      "sha256": "de74d2f7220334ee26e7872268e2e32a0696f49a9818426f2abeded04e1e7bd6"
+      "sha256": "042f0c4d09810336f9f7424727a4b4d311fdd951dcf07e769582e6f9b342e563"
     },
     {
       "path": "chrome-extension/bridge.js",
@@ -44,7 +44,7 @@
     },
     {
       "path": "chrome-extension/manifest.json",
-      "sha256": "dbceada915c58b2ad285b1eb82fa3967e6c113b7002409768c8c23a713ec59de"
+      "sha256": "ccd8d59977a51bcaa66248381f30f32d098d8aac3052d2b3f813ba45bbb16716"
     },
     {
       "path": "comparison_live_cache.py",
@@ -92,7 +92,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "5adcfd69aaeb278b659d5bf622bca6d0778fc7b578ce7cbc23f528f7d816a37a"
+      "sha256": "f9f87380b357535afd9308683329e7aa4c471fb6f93c445f1757c4720c329716"
     },
     {
       "path": "launch-dashboard-hidden.vbs",

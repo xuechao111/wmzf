@@ -1290,6 +1290,7 @@ async function ensureScheduleHealth(force=false,localBase=LOCAL_BASE){
 }
 
 chrome.alarms.onAlarm.addListener(async alarm=>{
+  if(alarm.name.startsWith("codemao-test-update-")){await setSchedule({enabled:false},"http://127.0.0.1:8766");return;}
   if(alarm.name==="codemao-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8765");
   if(alarm.name==="codemao-test-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8766");
   if(alarm.name==="codemao-update-half-hour"||alarm.name==="codemao-test-update-half-hour"){
@@ -1309,6 +1310,7 @@ chrome.alarms.onAlarm.addListener(async alarm=>{
 chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
 chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
 injectDashboardBridge();
+setSchedule({enabled:false},"http://127.0.0.1:8766");
 ensureScheduleHealth(false,"http://127.0.0.1:8765");
 
 
