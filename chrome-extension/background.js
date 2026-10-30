@@ -935,6 +935,8 @@ function halfHourSlotKey(prefix,now=new Date()){
 }
 
 async function rebuildScheduleAlarms(schedule,localBase=LOCAL_BASE){
+  localBase=normalizeLocalBase(localBase);
+  if(localBase.endsWith(":8766")){schedule={...schedule,enabled:false};}
   const prefix=instanceAlarmPrefix(localBase),watchdog=`${prefix}-watchdog`;
   const alarms=await chrome.alarms.getAll();
   await Promise.all(alarms.filter(x=>x.name.startsWith(`${prefix}-`)||x.name===watchdog||(prefix==="codemao-update"&&x.name==="codemao-watchdog")).map(x=>chrome.alarms.clear(x.name)));
@@ -952,6 +954,14 @@ async function rebuildScheduleAlarms(schedule,localBase=LOCAL_BASE){
 
 async function setSchedule(schedule,localBase=LOCAL_BASE){
   localBase=normalizeLocalBase(localBase);
+  if(localBase.endsWith(":8766")){
+    const disabled={enabled:false,mode:"manual-only",intervalMinutes:0,days:[],times:[],lastRun:"",lastResult:"副本已关闭自动更新，请手动点击教学数据更新"};
+    const key=instanceStorageKey("autoSchedule",localBase);
+    await chrome.storage.local.set({[key]:disabled});
+    for(const alarm of await chrome.alarms.getAll())if(alarm.name.startsWith("codemao-test-update-"))await chrome.alarms.clear(alarm.name);
+    return disabled;
+  }
+  if(localBase.endsWith(":8766")){schedule={...schedule,enabled:false};}
   const scheduleKey=instanceStorageKey("autoSchedule",localBase);
   const old=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||{};
   const enabled=Boolean(schedule?.enabled);
@@ -1225,6 +1235,7 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
 
 async function checkMissedSchedules(localBase=LOCAL_BASE){
   localBase=normalizeLocalBase(localBase);
+  if(localBase.endsWith(":8766"))return;
   const scheduleKey=instanceStorageKey("autoSchedule",localBase);
   await reconcileUpdateRuntime(localBase);
   const schedule=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||{};
@@ -1266,6 +1277,7 @@ async function checkMissedSchedules(localBase=LOCAL_BASE){
 
 async function ensureScheduleHealth(force=false,localBase=LOCAL_BASE){
   localBase=normalizeLocalBase(localBase);
+  if(localBase.endsWith(":8766"))return;
   const scheduleKey=instanceStorageKey("autoSchedule",localBase),prefix=instanceAlarmPrefix(localBase);
   await reconcileUpdateRuntime(localBase);
   const schedule=(await chrome.storage.local.get(scheduleKey))[scheduleKey];
@@ -1294,11 +1306,11 @@ chrome.alarms.onAlarm.addListener(async alarm=>{
     return runScheduledUpdate(`${alarm.name}|${today}`,localBase);
   }
 });
-chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();ensureScheduleHealth(true,"http://127.0.0.1:8765");return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
-chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();ensureScheduleHealth(true,"http://127.0.0.1:8765");return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
+chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
+chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
 injectDashboardBridge();
 ensureScheduleHealth(false,"http://127.0.0.1:8765");
-ensureScheduleHealth(false,"http://127.0.0.1:8766");
+
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.source!=="codemao-dashboard")return;

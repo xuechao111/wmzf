@@ -36,7 +36,7 @@
     },
     {
       "path": "chrome-extension/background.js",
-      "sha256": "e898e5562f767d3caf13d23b424753961840af4661d18aa5578d976afae7f353"
+      "sha256": "de74d2f7220334ee26e7872268e2e32a0696f49a9818426f2abeded04e1e7bd6"
     },
     {
       "path": "chrome-extension/bridge.js",
@@ -92,7 +92,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "2336c639ef8913ce42a1061dd4affdccd058aefb52f834dc75ffaff87158dbac"
+      "sha256": "5adcfd69aaeb278b659d5bf622bca6d0778fc7b578ce7cbc23f528f7d816a37a"
     },
     {
       "path": "launch-dashboard-hidden.vbs",
@@ -136,7 +136,7 @@
     },
     {
       "path": "run_dashboard_update.py",
-      "sha256": "072cabdbe8ac0a633da00a740ec3959d083d36d6ee7923cfec36554ea39765f2"
+      "sha256": "0ba7943fe7717dc7763d2b78ab9e673323b7bb9f1a3e1aaa09dfef11dcb320bc"
     },
     {
       "path": "scripts/build_group_dashboard.mjs",
@@ -300,7 +300,7 @@
     },
     {
       "path": "使用说明.txt",
-      "sha256": "4e7aac5e77acbd9a9dc2ed4324c72403d902d1eef5600015fad57416f4a66d70"
+      "sha256": "28e05ebd3a5a9aeb31df07993eae59565a70fe5b85e74bee9c4e04bf77d15086"
     },
     {
       "path": "启动 HyperFrames 控制台.bat",

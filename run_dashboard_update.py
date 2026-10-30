@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import msvcrt
@@ -17,8 +17,6 @@ from pathlib import Path
 
 from overview_total_table import SHEET_NAME as OVERVIEW_TOTAL_SHEET_NAME
 from overview_total_table import build_overview_total_table
-from weekly_attendance_table import SHEET_NAME as WEEKLY_ATTENDANCE_SHEET_NAME
-from weekly_attendance_table import build_weekly_attendance_table, write_weekly_attendance_sheet
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1049,8 +1047,6 @@ def apply_explicit_number_formats(sheet_id: str, table: dict) -> None:
 def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
     if name in DISABLED_SHEETS:
         return 0
-    if name == WEEKLY_ATTENDANCE_SHEET_NAME:
-        return write_weekly_attendance_sheet(sys.modules[__name__], table, updated_at)
     sheet_ids = load_sheet_ids()
     sheet_id = sheet_ids.get(name)
     if not sheet_id:
@@ -1225,7 +1221,6 @@ def run(from_raw: bool = False) -> None:
     snapshot = json.loads((ROOT / "dashboard-snapshot.json").read_text(encoding="utf-8"))
     validate_abnormal_summary(export["tables"]["异常学员"], snapshot)
     tables[OVERVIEW_TOTAL_SHEET_NAME] = build_overview_total_table(snapshot)
-    tables[WEEKLY_ATTENDANCE_SHEET_NAME] = build_weekly_attendance_table(snapshot, dingtalk_excluded)
     # Stop syncing retired views while preserving existing workbook sheets.
     for disabled_name in DISABLED_SHEETS:
         tables.pop(disabled_name, None)
