@@ -66,10 +66,14 @@ def build_consecutive_incomplete(blocks, main_term_by_class, now):
                     "className": class_name,
                     "slot": slot,
                     "courseNumber": int(completion.get("course_number") or 0),
+                    "missingCourses": {(class_id, course_id)},
                 }
                 # A learner can be duplicated after a class transfer. Prefer the
                 # record carrying a visible phone, otherwise keep the latest row.
                 previous = week_records.setdefault(week_start, {}).get(student_id)
+                if previous:
+                    record["missingCourses"].update(previous.get("missingCourses", set()))
+                    previous.setdefault("missingCourses", set()).update(record["missingCourses"])
                 if not previous or (previous["phone"] == "CRM未提供明文" and record["phone"] != "CRM未提供明文"):
                     week_records[week_start][student_id] = record
     opened_weeks = sorted(opened_weeks)
@@ -106,6 +110,7 @@ def build_consecutive_incomplete(blocks, main_term_by_class, now):
             latest["classId"], latest["className"], latest["slot"],
             f"{first_label}｜第{older['courseNumber']}课", f"{second_label}｜第{latest['courseNumber']}课", len(streak),
             "待安排", "", "请尽快完成课程，避免影响后续比赛安排。", "否", "待跟进", "", "", period,
+            len(set().union(*(record.get("missingCourses", set()) for _, record in streak))),
         ])
     rows.sort(key=lambda row: (row[3], row[7], row[1], row[0]))
     return rows, period
@@ -237,7 +242,54 @@ def abnormal_category(reasons):
         parts.append("课程未完成")
     if "完课时长大于2小时" in reasons:
         parts.append("完课时长偏长")
+    if "部分已回看" in reasons:
+        parts.append("部分已回看")
+    elif "已回看" in reasons:
+        parts.append("已回看")
     return "｜".join(parts)
+
+
+def abnormal_level(reasons):
+    if "未完课" in reasons:
+        return "一级｜未完课（最高）"
+    if "未参加直播" in reasons:
+        return "二级｜未准时参播"
+    return "三级｜完课时长异常"
+
+
+def category_without_replay(category):
+    parts = [part for part in str(category).split("｜") if part not in {"已回看", "部分已回看"}]
+    # An unfinished learner belongs in the unfinished summary even when another
+    # lesson has excessive duration. Keep that detail in the learner row.
+    if any(part in {"未到课", "课程未完成"} for part in parts):
+        parts = [part for part in parts if part != "完课时长偏长"]
+    return "｜".join(parts)
+
+
+def build_abnormal_summary(rows, period):
+    """One teacher/student identity, one highest severity; subsets are labelled."""
+    teachers = {}
+    for level, teacher, _term, _name, uid, _slot, reason, _period in rows:
+        record = teachers.setdefault(teacher, {}).setdefault(str(uid), {"levels": set(), "reasons": set()})
+        record["levels"].add(level.split("｜")[0])
+        record["reasons"].update(reason.split("｜"))
+    columns = ["老师姓名", "一级·未完课合计", "其中·到课未完课", "其中·未到课", "二级·仅直播缺席",
+               "三级·仅时长异常", "未准时参播合计", "其中·已回看", "异常学员合计", "统计周期"]
+    result = []
+    for teacher, students in teachers.items():
+        first = {uid for uid, rec in students.items() if "一级" in rec["levels"]}
+        arrived = {uid for uid in first if "课程未完成" in students[uid]["reasons"]}
+        unarrived = first - arrived
+        second = {uid for uid, rec in students.items() if "二级" in rec["levels"]} - first
+        third = set(students) - first - second
+        absent = {uid for uid, rec in students.items() if "直播缺席" in rec["reasons"]}
+        replay = {uid for uid in absent if students[uid]["reasons"] & {"已回看", "部分已回看"}}
+        if any(not (students[uid]["reasons"] & {"课程未完成", "未到课"}) for uid in first):
+            raise RuntimeError(f"一级异常缺少未完课依据：{teacher}")
+        result.append([teacher, len(first), len(arrived), len(unarrived), len(second), len(third),
+                       len(absent), len(replay), len(students), period])
+    result.sort(key=lambda row: (-row[1], -row[-2], row[0]))
+    return {"title": "异常人数汇总\n其中列不相加", "columns": columns, "data": result}
 
 
 def followup_context_and_action(reason_text):
@@ -273,6 +325,14 @@ def followup_context_and_action(reason_text):
         ),
     }
     category = str(reason_text or "").strip()
+    if "已回看" in category:
+        if "部分已回看" in category:
+            return ("孩子已经补看了部分直播内容，愿意主动补上学习进度很棒", "找个轻松的时间补看剩余直播内容，再看看课程和作品是否都已完成")
+        if "未到课" in category or "课程未完成" in category:
+            return ("孩子课后已经补看了直播内容，这份学习主动性值得鼓励", "接着把课程剩余内容和作品完成，有卡点随时发给我")
+        if "完课时长偏长" in category:
+            return ("孩子课后已经补看了直播内容，学习也投入了不少时间", "聊聊学习中有没有卡住的地方，再一起确认下次直播时间")
+        return ("孩子课后已经补看了直播内容，能主动补上学习进度很棒", "一起确认下次直播时间，争取准时参加")
     if category in presets:
         return presets[category]
     return (
@@ -434,10 +494,12 @@ def main():
                 class_live_attend += live_attend
                 teacher_total["live_expected"] += live_expected
                 teacher_total["live_attend"] += live_attend
+                replayed_ids = set()
                 for row in live_items:
                     uid = str(row.get("user_id") or "")
                     is_timely = uid in attended_ids if board else attended(row)
                     if uid and not is_timely and (int(row.get("watch_time") or 0) > 0 or float(row.get("watch_process") or 0) > 0):
+                        replayed_ids.add(uid)
                         teacher_total["replay_ids"].add(uid)
                         replay_students[(teacher, class_id, uid, live_number)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, int(row.get("watch_time") or 0), float(row.get("watch_process") or 0) / 100, period]
                 current_absent = absent_ids if board else set(str(row.get("user_id") or "") for row in live_items if not attended(row))
@@ -449,27 +511,27 @@ def main():
                     key = (teacher, class_id, uid)
                     rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
                     rec["reasons"].add("未参加直播")
+                    rec.setdefault("missed_live_lessons", set()).add(int(live.get("course_id") or live_number))
+                    if uid in replayed_ids:
+                        rec.setdefault("replayed_live_lessons", set()).add(int(live.get("course_id") or live_number))
         if class_live_expected:
             live_rows.append([teacher, slot, class_id, class_name, ",".join(map(str, opened_live_numbers)), class_live_expected, class_live_attend, class_live_expected - class_live_attend, len(class_absent), class_live_attend / class_live_expected, period])
     abnormal_rows = []
     for rec in abnormal.values():
         if not rec["reasons"]:
             continue
+        if rec.get("replayed_live_lessons"):
+            rec["reasons"].add("已回看" if rec["replayed_live_lessons"] == rec["missed_live_lessons"] else "部分已回看")
         category = abnormal_category(rec["reasons"])
-        if "未完课" in rec["reasons"]:
-            level = "一级｜未完课（最高）"
-        elif "未参加直播" in rec["reasons"]:
-            level = "二级｜未准时参播"
-        else:
-            level = "三级｜完课时长异常"
+        level = abnormal_level(rec["reasons"])
         abnormal_rows.append([level, rec["teacher"], rec["termShortId"], rec["student"], rec["id"], rec["slot"], category, period])
     priority = {"一级｜未完课（最高）": 1, "二级｜未准时参播": 2, "三级｜完课时长异常": 3}
     abnormal_rows.sort(key=lambda x: (priority.get(x[0], 9), x[2], x[1], ["周五晚", "周六午", "周六晚"].index(x[5]) if x[5] in ("周五晚", "周六午", "周六晚") else 9, x[3], x[4]))
     category_specs = [
-        ("一级｜未完课（最高）", "直播缺席｜未到课", "一级·直播缺席+未到课"),
-        ("一级｜未完课（最高）", "直播缺席｜课程未完成", "一级·直播缺席+课程未完成"),
         ("一级｜未完课（最高）", "未到课", "一级·未到课"),
         ("一级｜未完课（最高）", "课程未完成", "一级·课程未完成"),
+        ("一级｜未完课（最高）", "直播缺席｜未到课", "一级·直播缺席+未到课"),
+        ("一级｜未完课（最高）", "直播缺席｜课程未完成", "一级·直播缺席+课程未完成"),
         ("二级｜未准时参播", "直播缺席｜完课时长偏长", "二级·直播缺席+时长偏长"),
         ("二级｜未准时参播", "直播缺席", "二级·直播缺席"),
         ("三级｜完课时长异常", "完课时长偏长", "三级·时长偏长"),
@@ -478,18 +540,11 @@ def main():
     category_levels = {row[6]: row[0] for row in abnormal_rows}
     recommended_rows = [
         [category, *followup_scripts(category), period]
-        for category in sorted(category_levels, key=lambda value: category_order.get(value, 99))
+        for category in sorted(category_levels, key=lambda value: (category_order.get(category_without_replay(value), 99), value))
     ]
-    grouped_students = {}
-    for level, teacher, _term_short_id, _student, student_id, _slot, category, _period in abnormal_rows:
-        grouped_students.setdefault((teacher, level, category), set()).add(student_id)
-    teacher_names = sorted({row[1] for row in abnormal_rows})
-    abnormal_summary_rows = []
-    for teacher in teacher_names:
-        counts = [len(grouped_students.get((teacher, level, category), set())) for level, category, _ in category_specs]
-        abnormal_summary_rows.append([teacher, *counts, sum(counts), period])
-    abnormal_summary_rows.sort(key=lambda row: (-row[-2], row[0]))
-    abnormal_summary_columns = ["老师姓名", *[label for _level, _category, label in category_specs], "异常学员合计", "统计周期"]
+    abnormal_summary = build_abnormal_summary(abnormal_rows, period)
+    abnormal_summary_rows = abnormal_summary["data"]
+    abnormal_summary_columns = abnormal_summary["columns"]
     untimely_rows = sorted(untimely.values(), key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2]))
     replay_rows = sorted(replay_students.values(), key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[3]) if x[3] in ("周五晚", "周六午", "周六晚") else 9, x[1], x[2], x[6]))
     live_rows.sort(key=lambda x: (x[0], ["周五晚", "周六午", "周六晚"].index(x[1]) if x[1] in ("周五晚", "周六午", "周六晚") else 9))
@@ -575,12 +630,19 @@ def main():
             consecutive_period,
         ])
     consecutive_rows.sort(key=lambda row: (-row[1], row[0]))
+    # Add display detail after category summaries/scripts are computed so counts
+    # and category matching continue to use the original exception categories.
+    streak_details = {(str(row[3]), str(term_short_ids.get(row[4], "")), str(row[0]), str(row[7])): row for row in consecutive_details}
+    for row in abnormal_rows:
+        detail = streak_details.get((str(row[1]), str(row[2]), str(row[4]), str(row[5])))
+        if row[0] == "一级｜未完课（最高）" and detail and detail[10] >= 2:
+            row[6] += f"｜连续落课{detail[10]}周｜实际落课{detail[19]}节"
+
     tables = {
         "组内概览": {"columns": ["主课期", "老师", "班级数", "到课率", "直播上座率", "偶数课完课率", "未完课", "未准时参播", "观看回放", "到课未完课", "同期异常", "统计周期"], "data": overview_rows,
                  "dtypes": {"班级数": "int", "到课率": "float", "直播上座率": "float", "偶数课完课率": "float", "未完课": "int", "未准时参播": "int", "观看回放": "int", "到课未完课": "int"}, "formats": {"到课率": "0.0%", "直播上座率": "0.0%", "偶数课完课率": "0.0%"}},
         "异常学员": {"columns": ["异常等级", "老师姓名", "课期ID", "学生姓名", "学生ID", "班型", "异常原因", "统计周期"], "data": abnormal_rows,
-                 "summary": {"title": "各老师异常等级与学员类别汇总（按学员去重）", "columns": abnormal_summary_columns, "data": abnormal_summary_rows}},
-        "推荐话术": {"columns": ["异常学员类别", "温和关怀型", "陪伴推进型", "积极鼓励型", "统计周期"], "data": recommended_rows},
+                 "summary": abnormal_summary},
         "未准时参播学员": {"columns": ["老师姓名", "学生姓名", "学生ID", "班型", "班级ID", "班级", "直播课节", "统计周期"], "data": untimely_rows,
                     "dtypes": {"班级ID": "int", "直播课节": "int"}},
         "回放学员": {"columns": ["老师姓名", "学生姓名", "学生ID", "班型", "班级ID", "班级", "直播课节", "回放时长（秒）", "回放进度", "统计周期"], "data": replay_rows,

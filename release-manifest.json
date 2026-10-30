@@ -1,0 +1,322 @@
+{
+  "version": "2026.10.30-v7",
+  "connectorVersion": "1.6.63",
+  "files": [
+    {
+      "path": "DESIGN.md",
+      "sha256": "192dec2bc8105739f005c3fcbe9cd5b0b96996bfbd1ced985f99e1c58af57cc9"
+    },
+    {
+      "path": "README.md",
+      "sha256": "9d451bf73d122f9a763076788ccf0a167c47fa8afe76ab8fd1f4bf8fd4ade646"
+    },
+    {
+      "path": "assets/codemao-logo.png",
+      "sha256": "3cf006c73ee21d1bcfd82f569fccaff395d4d7c31fee39b33b44222f6d0e52f1"
+    },
+    {
+      "path": "audit_weekly_rosters.py",
+      "sha256": "8365d62cbef3400a27c18ff0f9251132e11f985c526d0e505950b83428bd52ae"
+    },
+    {
+      "path": "bridge.ps1",
+      "sha256": "1e0dd91d539094ab2e213aa14a2bb499f3c5b684ea702e166bdd673894cfa3b0"
+    },
+    {
+      "path": "broadcast_report.py",
+      "sha256": "444f4ce11fe84ffededee4fb1fc9aed1f62b2b1adedf38686c9563572b2ed00f"
+    },
+    {
+      "path": "broadcast_scope.py",
+      "sha256": "5daa0827e668e7c31f4e4f5d61194829f40ade4a71c27d10cfead780ac74430d"
+    },
+    {
+      "path": "build_exception_exports.py",
+      "sha256": "b2bf14c29d696070f3dc47f7a808f56df82755da08fc31db06e4d1a75da3631b"
+    },
+    {
+      "path": "chrome-extension/background.js",
+      "sha256": "e898e5562f767d3caf13d23b424753961840af4661d18aa5578d976afae7f353"
+    },
+    {
+      "path": "chrome-extension/bridge.js",
+      "sha256": "0a0b347a92572bb17a6fb41505ba4829904ceab7048607ecf1510e231d89c98d"
+    },
+    {
+      "path": "chrome-extension/manifest.json",
+      "sha256": "dbceada915c58b2ad285b1eb82fa3967e6c113b7002409768c8c23a713ec59de"
+    },
+    {
+      "path": "comparison_live_cache.py",
+      "sha256": "3b48f113c5e6121588be46cefbcb4d383a004a2b347db2e63e8f317425e78116"
+    },
+    {
+      "path": "console_data_api.py",
+      "sha256": "343c8fe46d5af0b22a02f60f46dc319ba2d4132d8e9d9042f4de113ff358be12"
+    },
+    {
+      "path": "dashboard-config.example.json",
+      "sha256": "fa9be1494b31d7f22a62f3c4a019236de123f0507da090acdce311ade0f7c119"
+    },
+    {
+      "path": "dashboard-config.portable.example.json",
+      "sha256": "bbce50bc2243c4369ecbcfef6fda2e900943a9b6523f7fbb507f5167aaf6ae8d"
+    },
+    {
+      "path": "dashboard-config.test.example.json",
+      "sha256": "6782b8dbc188509920a061306dcb2179b04643dafed1f1eef29ed042b157d533"
+    },
+    {
+      "path": "dingtalk_group_sender.py",
+      "sha256": "ccaee79fe2fa78988159bf7f2a6fc7d64b0531d8da26d394a47551c1bb6a3de8"
+    },
+    {
+      "path": "ensure-dashboard-service-hidden.vbs",
+      "sha256": "60a491cafcc62b143a2006f6b960e6395592860a9a122303ce84db6f18f5ddd8"
+    },
+    {
+      "path": "ensure-dashboard-service.ps1",
+      "sha256": "9709aa4d88def84357ff7a3ff93e39ff5ab618a68cd932fb892da7c0de8f427a"
+    },
+    {
+      "path": "export_group_broadcast.py",
+      "sha256": "94d78b4b1af117faa617669c823088615abcc473206def5dbdf75be0293d323d"
+    },
+    {
+      "path": "fetch_group_via_extension.mjs",
+      "sha256": "33d84bb10268c6caf897129e5cc1ad19a2aeb2f2da97a3521a90bcfd9688a9e8"
+    },
+    {
+      "path": "get_dashboard_snapshot.py",
+      "sha256": "e5f4447de1be53403a29dca1c685465899c70c141bbb854433de1ba1ca788cae"
+    },
+    {
+      "path": "index.html",
+      "sha256": "2336c639ef8913ce42a1061dd4affdccd058aefb52f834dc75ffaff87158dbac"
+    },
+    {
+      "path": "launch-dashboard-hidden.vbs",
+      "sha256": "c08f28993177c3aa3c00a7bdbd7d241e0ea7560d034bfeabd697466428c1d6b5"
+    },
+    {
+      "path": "overview_total_table.py",
+      "sha256": "65c8ff6a40d981f24d0b81220bff1e29ad93dc9f79853d8ecc64b431dea93abc"
+    },
+    {
+      "path": "prepare_extension_update.py",
+      "sha256": "401868fdbdc15d6b8ac82d94e619d8b65c955e1f80ae9945e63783049c73a338"
+    },
+    {
+      "path": "restart-dashboard.ps1",
+      "sha256": "2ac044795eafd0342da744a1aba00342b4e7740145255765ae98be5ae4d8e9e2"
+    },
+    {
+      "path": "run-cohort-exception-from-extension.ps1",
+      "sha256": "8224a54ae3f42412cd9b214b3bd3d04e5c8bbeed642bf2f1be99fae3534767c6"
+    },
+    {
+      "path": "run-direct-from-extension.ps1",
+      "sha256": "84e4ae7d9954ba84516a877e735a0141e8e288d1d4547a39ff882bed4d604bfc"
+    },
+    {
+      "path": "run-direct.ps1",
+      "sha256": "f2ee375ed337b23dfc88dd96024da5b8497d6a4d01563d402b1259a06e8135e8"
+    },
+    {
+      "path": "run-nct-update.ps1",
+      "sha256": "c9620a14212b3d00ac298e30d014eb8590a38acdaded77b902927c3e4ebce080"
+    },
+    {
+      "path": "run-scholarship-update.ps1",
+      "sha256": "b197da66b802bdc10b199cfc7d1ff927990b87678866994ead0663642a686f4b"
+    },
+    {
+      "path": "run-service-update.ps1",
+      "sha256": "c51214ba4b3561f167844b5984e11e6f0f671a7b4f8a47be29b946c0fc599775"
+    },
+    {
+      "path": "run_dashboard_update.py",
+      "sha256": "072cabdbe8ac0a633da00a740ec3959d083d36d6ee7923cfec36554ea39765f2"
+    },
+    {
+      "path": "scripts/build_group_dashboard.mjs",
+      "sha256": "2e69df25a0167d8d958478277bec8d1a96f6b1b253daddaa440e1a94177bc8ad"
+    },
+    {
+      "path": "scripts/fetch_group_lessons.mjs",
+      "sha256": "bf2aea196e7f97a99638c83ab78a6c949f0e9130a97fc8c694edb7216056c45d"
+    },
+    {
+      "path": "self-update.ps1",
+      "sha256": "f49a80978dd27a9d1363644b227c4fbadbd87a16c1aa10150a16cba12376d01f"
+    },
+    {
+      "path": "setup-workbench.ps1",
+      "sha256": "0c8556c7869c160b5311f78bf2b1863a8c9e62d109bdc16d9f282636184c1a20"
+    },
+    {
+      "path": "start-test-workbench.ps1",
+      "sha256": "00d761e877536b45ed6e4348770e0d631b0af19fb986a7209ff52611f7ec2195"
+    },
+    {
+      "path": "start-workbench.bat",
+      "sha256": "2b71aeea5e8584f9fa5a5afabcef0d995a28f9db789eb1e6cd7182686db38bc7"
+    },
+    {
+      "path": "start-workbench.ps1",
+      "sha256": "37b0dfe34d21ca3c5911951e57b357e61ac5a78c21b3035bf44b64a05884554d"
+    },
+    {
+      "path": "sync-nct-table.mjs",
+      "sha256": "b7d4ecac2a19ed3951001f21804f82550ec483df3834c446800d9bac90dcb946"
+    },
+    {
+      "path": "sync-renewal-table.mjs",
+      "sha256": "2fb8b4be010555e5dae5344e02ad298647846c2d4b2134c0c0508041cb1e4efa"
+    },
+    {
+      "path": "sync-service-data.mjs",
+      "sha256": "2c11ebde27d06a29c0b10f8b97cfaadb1ab894c447a052145f3ea98bb4421b05"
+    },
+    {
+      "path": "tests/broadcast-result.test.ps1",
+      "sha256": "f5998682b147035286b14290447c24c68d405d382eadf9408590dcce8e6939d0"
+    },
+    {
+      "path": "tests/class-preparation.test.mjs",
+      "sha256": "2a0b424405fc1cd61ac08df84543683f67891db735c18c98481a530c7dc8bea9"
+    },
+    {
+      "path": "tests/class-preparation.test.ps1",
+      "sha256": "87eec9572142a0a268591deaa9f5f0fa646d1c4ec6a7c615f906906a5e563c70"
+    },
+    {
+      "path": "tests/comparison-live.test.mjs",
+      "sha256": "9d1a36081d39f94d435aa5681546067225b36b18e1d56ee689344735d2bd4383"
+    },
+    {
+      "path": "tests/fixtures/overview_styles_before_batching.py",
+      "sha256": "ed77509f00bad4104a5dbc6a4352286d01eaa86b80e70c4d1a9114601aaee42d"
+    },
+    {
+      "path": "tests/live-board-match.test.mjs",
+      "sha256": "7c849a48506eda63fae1c0c9b98fee5b8bd13b2171d6935974a44d7d4a74a321"
+    },
+    {
+      "path": "tests/live-slot-source.test.mjs",
+      "sha256": "377d3518564aa5b00de1c2abfba5b965a6cb1b024626d743f377d5b59cfad3c5"
+    },
+    {
+      "path": "tests/nct-workflow.test.mjs",
+      "sha256": "623816a87af091c2af4e66e47293f66245d439830a17ffbfce335deb52eaea6f"
+    },
+    {
+      "path": "tests/opened-weeks.test.mjs",
+      "sha256": "51c336d21b089687b80dd61d5a2566239c76effbb2620d2a6647f127be6f0a65"
+    },
+    {
+      "path": "tests/renewal-relay.test.mjs",
+      "sha256": "d8017a39fcf0a3281506f287ef7bdab0c1efafb08be1fc88cb60f79bb31fa8c6"
+    },
+    {
+      "path": "tests/self-update.test.ps1",
+      "sha256": "c8e85983c3dae2dc9221847baeb4b17df00f5a5a714d183440dd0e96285931d6"
+    },
+    {
+      "path": "tests/service-daily.test.mjs",
+      "sha256": "ca0c2f4d13113826ecb49b05679749195733306cba668dcb426f28b5a450e73b"
+    },
+    {
+      "path": "tests/service-metrics.test.mjs",
+      "sha256": "bd67f8fae5128bdf3d35f3d1ec64ffa464a8da7e6cb8635894f9817cc51884bd"
+    },
+    {
+      "path": "tests/service-relay.test.mjs",
+      "sha256": "466bad79f4e6dbbb1c2ce05767a2b0a1e29a254f7606c9708e1e410d2fba1acf"
+    },
+    {
+      "path": "tests/service-runner.test.ps1",
+      "sha256": "7e289d90cadbcebe9e0f385a55db794233f38972b3b5ed0229e66378b2427ee0"
+    },
+    {
+      "path": "tests/term-catalog-cache.test.mjs",
+      "sha256": "16feb0c7674d416b1b72d46b88c31d1dbd53342b7e82914f2ffc93661769529a"
+    },
+    {
+      "path": "tests/test_abnormal_priority.py",
+      "sha256": "5a6a9055e9de39455a55cec5b1c602ccc8182b4d8bec09b6c09e9a60a88f47c9"
+    },
+    {
+      "path": "tests/test_class_source.py",
+      "sha256": "5418fcf5a81c0a97aba788735849d1b020f5ef8630d6fe0570ebd3044130a24f"
+    },
+    {
+      "path": "tests/test_comparison_live_cache.py",
+      "sha256": "f6c7002feca03da67cddae7e3dc1a9860f45e5e812a5dd7032aafe0025ee6cff"
+    },
+    {
+      "path": "tests/test_course_package.py",
+      "sha256": "5c2eb18740e66273796fc93f76f4b7ff6949f178915f134d86638a9fbc6a62e8"
+    },
+    {
+      "path": "tests/test_overview_batching.py",
+      "sha256": "36ea8fba620a80e2b3cc88cf82fa3832e789876b49c6a7a565cc5ca51282f650"
+    },
+    {
+      "path": "tests/test_style_batching.py",
+      "sha256": "d00a4a3a5bbcb71fbed0ecab93f4fd45883f26bbb9cec01c835455e63fc17a92"
+    },
+    {
+      "path": "tests/test_weekly_attendance.py",
+      "sha256": "4e2c6a4a739e595f1426c5044f70f36125f38c953fe912f35c875626dbad1e88"
+    },
+    {
+      "path": "tests/update-lifecycle.test.mjs",
+      "sha256": "72e56ceb5090421a7beb61a6f8582997bd497c726c9544cbe903fc8e664561ae"
+    },
+    {
+      "path": "update-workbench.ps1",
+      "sha256": "c61d66780046d7153ff436c58f3d6bc9223f8be990c2b28d8bb7f682b9850db3"
+    },
+    {
+      "path": "update_cohort_exception_sheet.py",
+      "sha256": "3bfdf819e000dfbce608d523dc76e91a4acbddea2f43f8ccfac37f2d16b93efb"
+    },
+    {
+      "path": "view.html",
+      "sha256": "9f2179ffb7f0e2273bc3e52a874eb9d998ba82b7a7319e48ad6faecf71d2c098"
+    },
+    {
+      "path": "weekly_attendance_table.py",
+      "sha256": "995a52d1bb690c80b6655892da52fa44aca39a3147f5605b0eeb284ca6aaa7cb"
+    },
+    {
+      "path": "write_exception_exports.py",
+      "sha256": "68feb5ea8771769222647c46b3718c99208756f985c04e4d199308d1861c333f"
+    },
+    {
+      "path": "一键更新工作台.bat",
+      "sha256": "ecfc6e7aa66dba742d256a32df5c5a52edc2e0f408ec9e2963c58db502d94be8"
+    },
+    {
+      "path": "使用说明.txt",
+      "sha256": "4e7aac5e77acbd9a9dc2ed4324c72403d902d1eef5600015fad57416f4a66d70"
+    },
+    {
+      "path": "启动 HyperFrames 控制台.bat",
+      "sha256": "2b71aeea5e8584f9fa5a5afabcef0d995a28f9db789eb1e6cd7182686db38bc7"
+    },
+    {
+      "path": "启动测试工作台.bat",
+      "sha256": "dcb87984d83061c6dba6e1f61160950f5ff6a6d2cd8f1ecdb7089fb509a304f1"
+    },
+    {
+      "path": "启动组长工作台.bat",
+      "sha256": "2b71aeea5e8584f9fa5a5afabcef0d995a28f9db789eb1e6cd7182686db38bc7"
+    },
+    {
+      "path": "首次安装一键配置.bat",
+      "sha256": "c894516790cadebf65a26d41a4af2c43f842df0c64744d9abc6a007e1322a1da"
+    }
+  ]
+}

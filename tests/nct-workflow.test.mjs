@@ -27,8 +27,7 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(background, /orderStatuss/);
   assert.match(background, /spuName/);
   assert.ok(manifest.host_permissions.includes("https://codecamp-marketing.codemao.cn/*"));
-  assert.equal(manifest.version, "1.6.39");
-  assert.match(html, /const minimum='1\.6\.39'/);
+  assert.ok(html.includes(`const minimum='${manifest.version}'`));
   assert.match(background, /mapLimit\(liveMatches,6/);
   assert.match(background, /requestedPageSize=100/);
   assert.match(background, /timeout:12000,attempts:3/);
@@ -43,7 +42,7 @@ test("NCT annual-card workflow stays wired end to end", () => {
   assert.match(sync, /NCT_VERIFY_HEADER_MISMATCH/);
   assert.match(sync, /attempts=4/);
   assert.match(sync, /DINGTALK_NETWORK_FAILED/);
-  assert.ok(runner.includes("$completed-and(Test-Path -LiteralPath $InputFile)"));
+  assert.match(runner, /\$completed-and\(Test-Path -LiteralPath \$InputFile\)/);
 });
 
 test("teaching-service writer retries transient DingTalk failures and preserves failed input", () => {
@@ -53,5 +52,5 @@ test("teaching-service writer retries transient DingTalk failures and preserves 
   assert.match(sync, /DINGTALK_NETWORK_FAILED/);
   assert.match(runner, /\$completed=\$false/);
   assert.match(runner, /\$completed=\$true/);
-  assert.ok(runner.includes("$completed-and(Test-Path $InputFile)"));
+  assert.match(runner, /\$completed-and.*Test-Path -LiteralPath \$InputFile/);
 });

@@ -23,6 +23,7 @@ function Write-ScholarshipStatus($state, $message, $detail = '') {
     [IO.File]::WriteAllText($statusFile, $payload, [Text.Encoding]::UTF8)
 }
 
+$completed = $false
 $lockStream = $null
 try {
     $lockStream = [IO.File]::Open($lockFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
@@ -41,26 +42,33 @@ try {
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorActionPreference
     $text = ($output -join "`n").Trim()
+    [IO.File]::WriteAllText((Join-Path $root 'scholarship-update.log'), $text, [Text.UTF8Encoding]::new($false))
     if ($exitCode -ne 0) {
         if ([string]::IsNullOrWhiteSpace($text)) { throw "本地脚本退出码：$exitCode" }
-        $firstLine = (($text -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-        $firstLine = $firstLine -replace '^.*?node\.exe\s*:\s*',''
-        if ($firstLine -match 'DINGTALK_TOOL_ERROR') { throw '钉钉表格写入失败，请稍后重试；若持续失败请检查目标子表结构。' }
-        if ($firstLine.Length -gt 240) { $firstLine = $firstLine.Substring(0,240) + '…' }
-        throw $firstLine
+        $errorLine = (($text -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Where-Object { $_ -notmatch '^CRM_OK rows=' } | Select-Object -Last 1)
+        if ([string]::IsNullOrWhiteSpace($errorLine)) { throw "本地脚本退出码：$exitCode；未返回具体错误，请查看 scholarship-update.log。" }
+        $errorLine = $errorLine -replace '^.*?node\.exe\s*:\s*',''
+        if ($errorLine -match 'DINGTALK_ACCESS_DENIED') { throw '当前钉钉连接账号无权访问续费文档，请核对配置中的续费文档链接及该账号的文档权限。' }
+        if ($errorLine -match 'DINGTALK_RENEWAL_DASHBOARD_NOT_FOUND') { throw '当前续费文档缺少续费看板子表，请确认续费文档链接或适配新文档结构。' }
+        if ($errorLine -match 'DINGTALK_TOOL_ERROR') { throw '钉钉表格写入失败，请稍后重试；若持续失败请检查目标子表结构。' }
+        if ($errorLine.Length -gt 240) { $errorLine = $errorLine.Substring(0,240) + '…' }
+        throw $errorLine
     }
 
     $crm = [regex]::Match($text, 'CRM_OK rows=(\d+) columns=(\d+)')
     if (-not $crm.Success) { throw '脚本已结束，但未返回 CRM 数据校验摘要。' }
     $sync = [regex]::Match($text, 'SYNC_OK rows=(\d+) lastRow=(\d+)')
     if (-not $sync.Success) { throw '钉钉写入完成标记缺失，已停止成功判定。' }
-    $stamp = [regex]::Match($text, 'DASHBOARD_TIMESTAMP_OK time=([^\r\n]+)')
+    if ($crm.Groups[1].Value -ne $sync.Groups[1].Value -or [long]$sync.Groups[2].Value -ne ([long]$sync.Groups[1].Value + 1)) { throw 'CRM 数量与写入行数不一致，已停止成功判定。' }
+    $stamp = [regex]::Match($text, '(DASHBOARD_TIMESTAMP_OK|LOCAL_TIMESTAMP_OK) time=([^\r\n]+)')
     if (-not $stamp.Success) { throw '续费看板更新时间写入标记缺失，已停止成功判定。' }
-    Write-ScholarshipStatus 'success' '续费表格数据更新完成' "CRM $($crm.Groups[1].Value) 条 · 已写入 $($sync.Groups[1].Value) 条 · 续费看板 A1：$($stamp.Groups[1].Value)"
+    $stampLocation = if ($stamp.Groups[1].Value -eq 'LOCAL_TIMESTAMP_OK') { '工作台更新时间' } else { '续费看板 A1' }
+    $completed = $true
+    Write-ScholarshipStatus 'success' '续费表格数据更新完成' "CRM $($crm.Groups[1].Value) 条 · 已写入 $($sync.Groups[1].Value) 条 · $($stampLocation)：$($stamp.Groups[2].Value)"
 } catch {
     Write-ScholarshipStatus 'error' '续费表格数据更新失败' $_.Exception.Message
     exit 1
 } finally {
     if ($null -ne $lockStream) { $lockStream.Dispose() }
-    if (Test-Path -LiteralPath $InputFile) { Remove-Item -LiteralPath $InputFile -Force -ErrorAction SilentlyContinue }
+    if ($completed -and (Test-Path -LiteralPath $InputFile)) { Remove-Item -LiteralPath $InputFile -Force -ErrorAction SilentlyContinue }
 }

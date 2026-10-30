@@ -1,4 +1,4 @@
-$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+﻿$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'

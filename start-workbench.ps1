@@ -1,14 +1,14 @@
-﻿param([switch]$NoBrowser, [int]$Port = 8765)
+﻿param([switch]$NoBrowser, [int]$Port = 8766)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $url = "http://127.0.0.1:$Port/"
-$expectedApiVersion = '2026-10-08-update-entry-r3'
-$expectedBridgeHash = (Get-FileHash -LiteralPath (Join-Path $root 'bridge.ps1') -Algorithm SHA256).Hash
+$expectedApiVersion = '2026-10-30-replica-v7'
+$expectedBridgeHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes((Join-Path $root 'bridge.ps1'))))).Replace('-','')
 $healthy = $false
 try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 4
-    $healthy = $response.StatusCode -eq 200 -and $response.Content -match 'CODEMAO TEACHING OPS'
+    $healthy = $response.StatusCode -eq 200 -and $response.Content -match 'id="page-home"'
     if ($healthy) {
         try {
             $capability = Invoke-RestMethod -UseBasicParsing -Uri ("http://127.0.0.1:$Port/health") -TimeoutSec 3
@@ -28,7 +28,11 @@ if (-not $healthy) {
             Start-Sleep -Milliseconds 500
         }
     }
-    $env:HF_DASHBOARD_ROOT = $root
+    $env:HF_DASHBOARD_ROOT = if (Test-Path -LiteralPath (Join-Path $root 'dashboard-config.json')) { $root } else { Join-Path $root 'instances\test' }
+    $env:HF_DASHBOARD_INSTANCE = 'test'
+    if (-not (Test-Path -LiteralPath $env:HF_DASHBOARD_ROOT)) { [void](New-Item -ItemType Directory -Path $env:HF_DASHBOARD_ROOT -Force) }
+    $configFile = Join-Path $env:HF_DASHBOARD_ROOT 'dashboard-config.json'
+    if (-not (Test-Path -LiteralPath $configFile)) { Copy-Item -LiteralPath (Join-Path $root 'dashboard-config.test.example.json') -Destination $configFile }
     $env:HF_DASHBOARD_SOURCE_ROOT = $root
     $env:HF_DASHBOARD_PORT = [string]$Port
     $env:HF_DASHBOARD_NO_OPEN = '1'
@@ -38,7 +42,7 @@ if (-not $healthy) {
         Start-Sleep -Milliseconds 500
         try {
             $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 3
-            if ($response.StatusCode -eq 200 -and $response.Content -match 'CODEMAO TEACHING OPS') { $healthy = $true; break }
+            if ($response.StatusCode -eq 200 -and $response.Content -match 'id="page-home"') { $healthy = $true; break }
         } catch {}
     }
 }

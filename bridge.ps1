@@ -4,9 +4,9 @@ Add-Type -AssemblyName System.Web
 # Windows PowerShell 5.1 may otherwise negotiate an obsolete TLS version.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8765 }
-$workbenchApiVersion = '2026-10-08-update-entry-r3'
-$runningBridgeHash = (Get-FileHash -LiteralPath $MyInvocation.MyCommand.Path -Algorithm SHA256).Hash
+$port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8766 }
+$workbenchApiVersion = '2026-10-30-replica-v7'
+$runningBridgeHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path)))).Replace('-','')
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
     $env:HF_DASHBOARD_SOURCE_ROOT
 } elseif (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
@@ -16,7 +16,7 @@ $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROO
 }
 $sourceRoot = [IO.Path]::GetFullPath($sourceRoot)
 $root = $env:HF_DASHBOARD_ROOT
-if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
+if ([string]::IsNullOrWhiteSpace($root)) { $root = Join-Path $sourceRoot 'instances\test' }
 if (-not (Test-Path -LiteralPath $root)) { [void](New-Item -ItemType Directory -Path $root -Force) }
 $indexFile = Join-Path $sourceRoot 'index.html'
 $viewFile = Join-Path $sourceRoot 'view.html'
@@ -100,8 +100,8 @@ function Start-SelfUpdate {
     if (Test-Path -LiteralPath $selfUpdateStatusFile) {
         try { $running = Get-Content -LiteralPath $selfUpdateStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
     }
-    if ($running -and [string]$running.state -eq 'running') { return '更新任务已在运行。' }
-    $initial = [ordered]@{state='running';message='正在启动一键更新…';detail='优先 Git，未安装 Git 时自动下载 ZIP。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')} | ConvertTo-Json -Compress
+    if ($running -and [string]$running.state -eq 'running' -and ((Get-Date)-(Get-Item -LiteralPath $selfUpdateStatusFile).LastWriteTime).TotalMinutes -lt 15) { return '更新任务已在运行。' }
+    $initial = [ordered]@{state='running';message='正在启动一键更新…';detail='校验更新包并备份程序；保留本机配置和运行数据。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($selfUpdateStatusFile,$initial,$utf8NoBom)
     $instance = if ($env:HF_DASHBOARD_INSTANCE) { [string]$env:HF_DASHBOARD_INSTANCE } else { '' }
     $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $selfUpdateRunner + '"'),'-InstallRoot',('"' + $sourceRoot + '"'),'-RuntimeRoot',('"' + $root + '"'),'-Port',[string]$port)
@@ -109,6 +109,58 @@ function Start-SelfUpdate {
     $arguments += @('-ServicePid',[string]$PID)
     Start-Process powershell.exe -ArgumentList $arguments -WindowStyle Hidden
     return '一键更新已启动。'
+}
+
+function Start-TeacherBroadcast {
+    $runner = Join-Path $sourceRoot 'broadcast_report.py'
+    if (-not (Test-Path -LiteralPath $runner)) { throw '未找到通晒脚本。' }
+    $broadcastPython = $python
+    if (Test-Path -LiteralPath $bundledPython) { $broadcastPython = $bundledPython }
+    $pythonArgs = "`"$runner`" --send --force"
+    $outLog = Join-Path $root 'broadcast-out.log'
+    $errLog = Join-Path $root 'broadcast-err.log'
+    $process = Start-Process -FilePath $broadcastPython -ArgumentList $pythonArgs -WorkingDirectory $sourceRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    # Retain the native handle before waiting: Windows PowerShell can otherwise
+    # expose a null ExitCode for a process returned by Start-Process.
+    $processHandle = $process.Handle
+    if (-not $process.WaitForExit(90000)) { throw '发送仍在运行，请勿重复点击；请查看 broadcast-out.log。' }
+    $process.WaitForExit()
+    $process.Refresh()
+    if ($null -eq $process.ExitCode) { throw '无法确认发送进程退出状态，请核对发送日志；请勿重复点击。' }
+    if ($process.ExitCode -ne 0) { throw '通晒脚本执行失败，请查看 broadcast-err.log。' }
+    $result = Get-Content -LiteralPath $outLog -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $result.cohortsSentThisRun -or [int]$result.cohortsSentThisRun -lt 0) { throw '发送结果校验失败，请核对日志；请勿重复点击。' }
+    $message = '已成功发送 ' + $result.cohortsSentThisRun + ' 个课期'
+    $schedule = Get-BroadcastSchedule
+    $schedule.lastResult = $message
+    $schedule | Add-Member -NotePropertyName lastSuccessTime -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Force
+    Save-BroadcastSchedule $schedule
+    return @{ok=$true; message=$message; sent=$result.cohortsSentThisRun}
+}
+
+function Get-BroadcastSchedule {
+    $file = Join-Path $root 'broadcast-schedule.local.json'
+    if (Test-Path $file) { return (Get-Content $file -Raw -Encoding UTF8 | ConvertFrom-Json) }
+    return @{enabled=$false;times=@('14:00','18:00','20:00','21:00');lastAttempt='';lastResult='尚未运行'}
+}
+function Save-BroadcastSchedule($value) {
+    [IO.File]::WriteAllText((Join-Path $root 'broadcast-schedule.local.json'),($value | ConvertTo-Json -Depth 5),$utf8NoBom)
+}
+function Invoke-BroadcastSchedule {
+
+    $now = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'China Standard Time')
+    $minute = $now.ToString('yyyy-MM-dd HH:mm')
+    if ($script:lastBroadcastTick -eq $minute) { return }
+    $script:lastBroadcastTick=$minute
+    try {
+        $s=Get-BroadcastSchedule
+        if (-not $s.enabled -or $now.ToString('HH:mm') -notin @($s.times) -or $s.lastAttempt -eq $minute) { return }
+        $s.lastAttempt=$minute
+        $s.lastResult='正在发送'
+        Save-BroadcastSchedule $s
+        try { $result=Start-TeacherBroadcast; $s.lastResult=$result.message } catch { $s.lastResult='发送失败，请查看 broadcast-err.log' }
+        Save-BroadcastSchedule $s
+    } catch { Add-Content -LiteralPath $bridgeErrorLog -Value ('broadcast schedule: '+$_.Exception.Message) }
 }
 
 function Get-ShareConfig {
@@ -133,7 +185,6 @@ function Get-DashboardConfig {
         renewalSheetId = ''
         nctWorkbookUrl = ''
         serviceWorkbookUrl = ''
-        groupName = ''
         doubaoModelId = ''
         hasDoubaoApiKey = $false
         classes = @()
@@ -148,7 +199,7 @@ function Get-DashboardConfig {
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','groupName','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
+            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -219,7 +270,6 @@ function Save-DashboardConfig($bodyText) {
         renewalSheetId = ([string]$payload.renewalSheetId).Trim()
         nctWorkbookUrl = $nctWorkbook
         serviceWorkbookUrl = $serviceWorkbook
-        groupName = ([string]$payload.groupName).Trim()
         doubaoModelId = ([string]$payload.doubaoModelId).Trim()
         doubaoApiKey = $doubaoKey
         classes = $classes
@@ -513,7 +563,7 @@ function Repair-ServiceStatus {
         $lastChange = [DateTime]::ParseExact($stamp,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
         if (((Get-Date)-$lastChange).TotalMinutes -gt 8) {
             $now=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-            $repaired=[ordered]@{state='error';message='教学服务更新已超时并自动解除';detail='任务超过8分钟未完成，旧数据保持不变，现在可以重新更新。';time=$now;startedAt=[string]$status.startedAt;lastSuccessTime=[string]$status.lastSuccessTime}|ConvertTo-Json -Compress
+            $repaired=[ordered]@{state='error';message='教学服务更新已超时并自动解除';detail='任务超过8分钟未完成；部分数据可能已写入，请查看日志后重新更新。';time=$now;startedAt=[string]$status.startedAt;lastSuccessTime=[string]$status.lastSuccessTime}|ConvertTo-Json -Compress
             [IO.File]::WriteAllText($serviceStatusFile,$repaired,$utf8NoBom)
         }
     } catch {}
@@ -544,7 +594,7 @@ function Repair-StaleStatus {
         $lastChange = [DateTime]::ParseExact([string]$status.time,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
         $age = ((Get-Date) - $lastChange).TotalSeconds
         if ($age -gt $staleStageSeconds) {
-            Write-StatusObject 'error' '更新已超时并自动解除。' '某个阶段连续6分钟没有进展，已停止等待；旧数据保持不变，可以重新点击更新。' ([string]$status.startedAt) 'timeout'
+            Write-StatusObject 'error' '更新已超时并自动解除。' '某个阶段连续6分钟没有进展，已停止等待；部分子表可能已更新，请查看日志后重试。' ([string]$status.startedAt) 'timeout'
         }
     } catch {}
 }
@@ -646,7 +696,14 @@ function Send-ConsoleData($stream, $mode, $query) {
 function Send-DashboardData($stream) {
     $snapshotScript = Join-Path $sourceRoot 'get_dashboard_snapshot.py'
     $snapshotFile = Join-Path $root 'dashboard-snapshot.json'
-    if (-not (Test-Path $snapshotFile)) { & $python $snapshotScript }
+    $serviceFile = Join-Path $root 'service-data.json'
+    $needsSnapshot = -not (Test-Path $snapshotFile)
+    if (-not $needsSnapshot -and (Test-Path -LiteralPath $serviceFile)) {
+        $snapshotTime = (Get-Item -LiteralPath $snapshotFile).LastWriteTimeUtc
+        $serviceTime = (Get-Item -LiteralPath $serviceFile).LastWriteTimeUtc
+        if ($serviceTime -gt $snapshotTime) { $needsSnapshot = $true }
+    }
+    if ($needsSnapshot) { & $python $snapshotScript }
     Send-File $stream $snapshotFile 'application/json; charset=utf-8'
 }
 
@@ -697,7 +754,7 @@ function Test-ScheduledSlotAlreadyCompleted($slotKey) {
     $match = [regex]::Match([string]$slotKey, '^codemao-(?:test-)?update-\d-(\d{2})(\d{2})\|(\d{4}-\d{2}-\d{2})$')
     if (-not $match.Success) { return $false }
     $status = Read-StatusObject
-    if ($null -eq $status -or [string]$status.state -ne 'success' -or [string]::IsNullOrWhiteSpace([string]$status.lastSuccessTime)) { return $false }
+    if ($null -eq $status -or [string]$status.state -ne 'success' -or [string]$status.phase -ne 'service' -or [string]::IsNullOrWhiteSpace([string]$status.lastSuccessTime)) { return $false }
     try {
         $dueAt = [DateTime]::ParseExact(($match.Groups[3].Value + ' ' + $match.Groups[1].Value + ':' + $match.Groups[2].Value + ':00'),'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
         $successAt = [DateTime]::ParseExact([string]$status.lastSuccessTime,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
@@ -737,9 +794,48 @@ function Register-ScheduledSlotAttempt($slotKey) {
     [IO.File]::WriteAllText($scheduleAttemptFile,($state | ConvertTo-Json -Compress),$utf8NoBom)
 }
 
+$classPreparationJobs = @{}
+function Send-ClassPreparation($stream, [string]$response, [string]$scope = 'teaching') {
+    # Keep the HTTP listener free to serve the browser MCP relay while Python
+    # reads the current workbook. A synchronous read deadlocks that relay.
+    if (-not $classPreparationJobs.ContainsKey($response)) {
+        $prepareScript = Join-Path $sourceRoot 'prepare_extension_update.py'
+        $job = Start-Job -ArgumentList $python,$prepareScript,$response,$root -ScriptBlock {
+            param($runtime,$prepareScript,$response,$runtimeRoot)
+            $env:HF_DASHBOARD_ROOT = $runtimeRoot
+            $output = @(& $runtime '-X' 'utf8' $prepareScript $response 2>&1 | ForEach-Object { [string]$_ })
+            [pscustomobject]@{exitCode=$LASTEXITCODE;detail=($output -join "`n")}
+        }
+        $classPreparationJobs[$response] = @{job=$job;startedAt=(Get-Date)}
+    }
+    $entry = $classPreparationJobs[$response]
+    $job = $entry.job
+    if ($job.State -in @('NotStarted','Running') -and ((Get-Date)-$entry.startedAt).TotalSeconds -lt 110) {
+        # Older connectors retry a 503; a 202 would be mistaken for an empty
+        # class list before their extension reload has completed.
+        Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes('{"preparing":true}')) 'application/json; charset=utf-8' '503 Service Unavailable'
+        return
+    }
+    $result = $null
+    if ($job.State -eq 'Completed') { $result = Receive-Job $job -ErrorAction SilentlyContinue | Select-Object -Last 1 }
+    else { Stop-Job $job -ErrorAction SilentlyContinue }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    $classPreparationJobs.Remove($response)
+    if ($null -eq $result -or $result.exitCode -ne 0 -or -not (Test-Path -LiteralPath $response)) {
+        $detail = if ($result -and $result.detail) { [string]$result.detail } else { '读取最新班级明细超时或后台进程失败，请检查钉钉连接器后重试。' }
+        if ($scope -eq 'cohort') { Write-CohortExceptionStatus 'error' '班级明细读取失败，未使用旧名单。' $detail '' 'prepare' }
+        else { Write-StatusObject 'error' '班级明细读取失败，未使用旧名单。' $detail '' 'prepare' }
+        Send-Json $stream $detail '422 Unprocessable Entity'
+        return
+    }
+    Send-File $stream $response 'application/json; charset=utf-8'
+}
+
 function Send-ExtensionClasses($stream, $bodyText = '') {
     $slotKey = 'manual'
     try { if (-not [string]::IsNullOrWhiteSpace($bodyText)) { $slotKey = [string](($bodyText | ConvertFrom-Json).slotKey) } } catch {}
+    $response = Join-Path $root 'extension-classes.json'
+    if ($classPreparationJobs.ContainsKey($response)) { Send-ClassPreparation $stream $response; return }
     if (Test-ScheduledSlotAlreadyCompleted $slotKey) {
         $status = Read-StatusObject
         $payload = [ordered]@{alreadyCompleted=$true;lastSuccessTime=[string]$status.lastSuccessTime;slotKey=$slotKey} | ConvertTo-Json -Compress
@@ -761,27 +857,7 @@ function Send-ExtensionClasses($stream, $bodyText = '') {
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Register-ScheduledSlotAttempt $slotKey
     Write-StatusObject 'running' '正在通过连接器读取CRM最新数据…' '正在读取班级和直播数据，最长5分钟；请勿重复点击。' $startedAt 'crm'
-    $script = Join-Path $sourceRoot 'prepare_extension_update.py'
-    $response = Join-Path $root 'extension-classes.json'
-    # Run inside the already-hidden bridge process. Start-Process rebuilds the
-    # inherited environment and fails when Windows contains both Path and PATH.
-    $prepareOutput = @(& $python '-X' 'utf8' $script $response 2>&1)
-    $prepareExitCode = $LASTEXITCODE
-    if ($prepareExitCode -ne 0 -or -not (Test-Path $response)) {
-        $config = Get-DashboardConfig
-        $detail = if (@($config.classes).Count -eq 0 -and [string]::IsNullOrWhiteSpace([string]$config.dingtalkConnectionUrl)) {
-            '配置不完整：请填写钉钉连接地址，并填写班级ID与主课期ID（或在目标工作簿保留“班级id”子表）。'
-        } elseif ($prepareOutput.Count -gt 0) {
-            '读取班级配置失败：' + [string]$prepareOutput[-1]
-        } else {
-            '读取班级配置脚本异常退出（代码 ' + [string]$prepareExitCode + '，Python：' + [IO.Path]::GetFileName($python) + '）。请先重新运行首次安装一键配置；若仍失败，再检查“班级id”子表。'
-        }
-        Write-StatusObject 'error' '更新准备失败，未读取到班级配置。' $detail $startedAt 'prepare'
-        $payload = [ordered]@{message='Failed to prepare class IDs.';detail=$detail} | ConvertTo-Json -Compress
-        Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($payload)) 'application/json; charset=utf-8' '422 Unprocessable Entity'
-        return
-    }
-    Send-File $stream $response 'application/json; charset=utf-8'
+    Send-ClassPreparation $stream $response
 }
 
 function Write-CohortExceptionStatus($state, $message, $detail = '', $startedAt = '', $phase = '') {
@@ -801,19 +877,11 @@ function Write-CohortExceptionStatus($state, $message, $detail = '', $startedAt 
 }
 
 function Send-CohortExceptionClasses($stream) {
+    $response = Join-Path $root 'cohort-exception-classes.json'
+    if ($classPreparationJobs.ContainsKey($response)) { Send-ClassPreparation $stream $response 'cohort'; return }
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Write-CohortExceptionStatus 'running' '正在准备课期异常更新…' '仅读取班级配置，不会更新其他子表。' $startedAt 'prepare'
-    $script = Join-Path $sourceRoot 'prepare_extension_update.py'
-    $response = Join-Path $root 'cohort-exception-classes.json'
-    $prepareOutput = @(& $python '-X' 'utf8' $script $response 2>&1)
-    $prepareExitCode = $LASTEXITCODE
-    if ($prepareExitCode -ne 0 -or -not (Test-Path -LiteralPath $response)) {
-        $detail = if ($prepareOutput.Count -gt 0) { [string]$prepareOutput[-1] } else { '未读取到班级配置。' }
-        Write-CohortExceptionStatus 'error' '课期异常更新准备失败。' $detail $startedAt 'prepare'
-        Send-Json $stream $detail '422 Unprocessable Entity'
-        return
-    }
-    Send-File $stream $response 'application/json; charset=utf-8'
+    Send-ClassPreparation $stream $response 'cohort'
 }
 
 function Invoke-CohortExceptionUpdate($bodyText) {
@@ -918,7 +986,7 @@ function Commit-ExtensionChunks($bodyText) {
 
 function Set-ExtensionStatus($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
-    $allowed = @('idle','running','success','error')
+    $allowed = @('idle','running','waiting','success','error')
     $state = [string]$payload.state
     if ($allowed -notcontains $state) { $state = 'error' }
     $previous = Read-StatusObject
@@ -957,6 +1025,8 @@ try { $listener.Start() } catch { if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start
 if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start-Process "http://127.0.0.1:$port/" }
 
 while ($true) {
+    Invoke-BroadcastSchedule
+    if (-not $listener.Pending()) { Start-Sleep -Milliseconds 250; continue }
     $client = $listener.AcceptTcpClient()
     $stream = $null
     try {
@@ -1023,9 +1093,45 @@ while ($true) {
             Send-Json $stream '共享看板仅支持只读访问。' '405 Method Not Allowed'
             continue
         }
+        $writerPaths=@('/prepare-extension','/prepare-cohort-exception','/extension-data','/extension-data-commit','/cohort-exception-data-commit','/scholarship-extension-data','/service-extension-data','/nct-extension-data','/broadcast')
+        if ($method -eq 'POST' -and $path -in $writerPaths -and (Test-Path -LiteralPath $selfUpdateStatusFile)) {
+            $updating=$null
+            try { $updating=Get-Content -LiteralPath $selfUpdateStatusFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+            if ($updating -and $updating.state -eq 'running' -and ((Get-Date)-(Get-Item -LiteralPath $selfUpdateStatusFile).LastWriteTime).TotalMinutes -lt 15) {
+                Send-Json $stream '工作台程序正在升级，请完成后再更新数据。' '409 Conflict'
+                continue
+            }
+        }
         switch ($path) {
+            '/broadcast-schedule' {
+                try {
+                    if ($method -eq 'POST') {
+
+                        $inputSchedule=$bodyText | ConvertFrom-Json
+                        $times=@($inputSchedule.times | Select-Object -Unique)
+                        if ($times.Count -lt 1 -or $times.Count -gt 12) { throw '请选择1至12个发送时间。' }
+                        foreach ($time in $times) { if ([string]$time -notmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { throw '时间格式应为HH:mm。' } }
+                        $s=Get-BroadcastSchedule
+                        $s.enabled=[bool]$inputSchedule.enabled
+                        $s.times=$times
+                        Save-BroadcastSchedule $s
+                    } elseif ($method -ne 'GET') { throw '仅支持GET或POST。' }
+                    $scheduleJson=Get-BroadcastSchedule | ConvertTo-Json -Depth 5 -Compress
+                    Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($scheduleJson)) 'application/json; charset=utf-8'
+                } catch { Send-Json $stream $_.Exception.Message '400 Bad Request' }
+            }
+            '/comparison-input' {
+                if ($method -ne 'GET') { Send-Json $stream '仅主看板可读取对比老师更新输入。' '403 Forbidden' }
+                else {
+                    $rawFile = Join-Path $root 'run-data\group-lessons-raw.json'
+                    $config = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $raw = Get-Content -LiteralPath $rawFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $body = @{blocks=@($raw);comparisonTeachers=@($config.comparisonTeachers)} | ConvertTo-Json -Depth 100 -Compress
+                    Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($body)) 'application/json; charset=utf-8'
+                }
+            }
             '/health' {
-                $health = @{ ok=$true; apiVersion=$workbenchApiVersion; sourceRoot=$sourceRoot; runtimeRoot=$root; processId=$PID; bridgeHash=$runningBridgeHash } | ConvertTo-Json -Compress
+                $health = @{ ok=$true; apiVersion=$workbenchApiVersion; bridgeHash=$runningBridgeHash; sourceRoot=$sourceRoot; runtimeRoot=$root } | ConvertTo-Json -Compress
                 Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($health)) 'application/json; charset=utf-8'
             }
             '/' { Send-File $stream $indexFile 'text/html; charset=utf-8' }
@@ -1036,6 +1142,10 @@ while ($true) {
             '/assets/codemao-logo.png' { Send-File $stream (Join-Path $sourceRoot 'assets\codemao-logo.png') 'image/png' }
             '/run' { Send-Json $stream (Invoke-LegacyUpdate) }
             '/status' { Repair-StaleStatus; Send-File $stream $statusFile 'application/json; charset=utf-8' }
+            '/broadcast' {
+                if ($method -ne 'POST') { Send-Json $stream '请使用 POST 发送通晒。' '405 Method Not Allowed' }
+                else { try { $broadcastJson=(Start-TeacherBroadcast | ConvertTo-Json -Compress); Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($broadcastJson)) 'application/json; charset=utf-8' } catch { Send-Json $stream $_.Exception.Message '500 Internal Server Error' } }
+            }
             '/scholarship-status' { Send-ScholarshipStatus $stream }
             '/nct-status' { Send-NctStatus $stream }
             '/service-status' { Repair-ServiceStatus; Send-File $stream $serviceStatusFile 'application/json; charset=utf-8' }

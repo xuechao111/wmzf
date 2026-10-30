@@ -1,4 +1,4 @@
-param([switch]$CheckOnly)
+﻿param([switch]$CheckOnly)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path

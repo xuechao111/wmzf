@@ -43,7 +43,10 @@ for(let i=0;i<classes.length;i++){
   const weekday=(shanghai.getDay()+6)%7;
   const monday=new Date(shanghai);monday.setHours(0,0,0,0);monday.setDate(monday.getDate()-weekday);
   const windowStart=monday.getTime()/1000-21*86400,windowEnd=monday.getTime()/1000+7*86400;
-  const courseIds=lessons.filter(x=>Number(x.unlock_time||0)>=windowStart&&Number(x.unlock_time||0)<windowEnd&&Number(x.unlock_time||0)<=nowSec).map(x=>x.course_id); const items=[]; const pageSize=500;
+  const openedWeek=seconds=>Math.floor((Number(seconds)+8*3600-4*86400)/(7*86400));
+  const opened=lessons.filter(x=>Number(x.unlock_time||0)>0&&Number(x.unlock_time||0)<=nowSec);
+  const weeks=[...new Set(opened.map(x=>openedWeek(x.unlock_time)))].sort((a,b)=>b-a).slice(0,2);
+  const courseIds=opened.filter(x=>weeks.includes(openedWeek(x.unlock_time))).map(x=>x.course_id); const items=[]; const pageSize=500;
   for(let offset=0;offset<courseIds.length;offset+=courseChunkSize){
     const ids=courseIds.slice(offset,offset+courseChunkSize); const openCourseList=ids.map(courseId=>({courseId,paramValue:[0,1],isAllSelect:true}));
     let pageNo=1;

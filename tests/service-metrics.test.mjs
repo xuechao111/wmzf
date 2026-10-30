@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import {buildServiceViews,validateServiceSummaryTables,validateServiceGroup} from "../sync-service-data.mjs";
+import fs from "node:fs";
+import vm from "node:vm";
+import {buildServiceViews,validateServiceSummaryTables} from "../sync-service-data.mjs";
 
 const imHeaders=["worker_no","beisen_user_fullname","level_7_department_name","pre_teacher_3m_reply_cnt","im_answered_3m_count","im_question_count","im_user_count","im_eligible_student_count","im_usage_rate","callUsers","callCoverage","voiceDialCount","voiceConnectedCount","voiceConnectRate","videoCallUsers","videoCallCoverage","videoDialCount","videoConnectedCount","videoConnectRate"];
 const imRow={worker_no:"C18806",beisen_user_fullname:"阳鹏",level_7_department_name:"屹柯组",pre_teacher_3m_reply_cnt:"97.90%",im_answered_3m_count:48,im_question_count:49,im_user_count:14,im_eligible_student_count:36,im_usage_rate:38.9,callUsers:5,callCoverage:13.89,voiceDialCount:7,voiceConnectedCount:6,voiceConnectRate:85.71,videoCallUsers:2,videoCallCoverage:5.56,videoDialCount:3,videoConnectedCount:2,videoConnectRate:66.67};
@@ -13,13 +15,13 @@ assert.equal(teacher.imUsers,14);
 assert.equal(teacher.imEligibleStudents,36);
 assert.equal(teacher.imUsage,14/36*100);
 assert.equal(teacher.callUsers,5);
-assert.equal(teacher.callConnectedCount,5);
+assert.equal(teacher.callConnectedCount,8);
 assert.equal(teacher.callDialCount,10);
-assert.equal(teacher.callConnectRate,50);
-assert.equal(teacher.voiceCallUsers,3);
+assert.equal(teacher.callConnectRate,80);
+assert.equal(teacher.voiceCallUsers,null);
 assert.equal(teacher.voiceDialCount,7);
-assert.equal(teacher.voiceConnectedCount,3);
-assert.equal(teacher.voiceConnectRate,3/7*100);
+assert.equal(teacher.voiceConnectedCount,6);
+assert.equal(teacher.voiceConnectRate,6/7*100);
 assert.equal(teacher.videoCallUsers,2);
 assert.equal(teacher.videoDialCount,3);
 assert.equal(teacher.videoConnectedCount,2);
@@ -31,11 +33,11 @@ assert.equal(group.imQuestions,49);
 assert.equal(group.imUsers,14);
 assert.equal(group.imEligibleStudents,36);
 assert.equal(group.callUsers,5);
-assert.equal(group.callConnectedCount,5);
+assert.equal(group.callConnectedCount,8);
 assert.equal(group.callDialCount,10);
-assert.equal(group.voiceCallUsers,3);
+assert.equal(group.voiceCallUsers,null);
 assert.equal(group.voiceDialCount,7);
-assert.equal(group.voiceConnectedCount,3);
+assert.equal(group.voiceConnectedCount,6);
 assert.equal(group.videoCallUsers,2);
 assert.equal(group.videoDialCount,3);
 assert.equal(group.videoConnectedCount,2);
@@ -44,7 +46,7 @@ assert.equal(group.wecomQuestions,20);
 const todayOnly=buildServiceViews({im:{teacher:{headers:imHeaders,rows:[imRow]},group:{headers:imHeaders,rows:[{...imRow,worker_no:"",beisen_user_fullname:"",level_7_department_name:"屹柯组"}]}}});
 assert.equal(todayOnly.teachers[0].voiceDialCount,7);
 assert.equal(todayOnly.teachers[0].videoDialCount,3);
-assert.equal(todayOnly.teachers[0].callConnectedCount,5);
+assert.equal(todayOnly.teachers[0].callConnectedCount,8);
 assert.equal(todayOnly.teachers[0].wecom,null);
 const aggregatedDetail={...source,im:{teacher:{...source.im.teacher,chartName:"课中数据回复率-明细数据-老师",granular:false,aggregation:"summary-chart"},group:{...source.im.group,chartName:"课中数据回复率-小组数据（聚合）",granular:false,aggregation:"summary-chart"}}};
 assert.doesNotThrow(()=>validateServiceSummaryTables(aggregatedDetail));
@@ -52,6 +54,20 @@ assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggre
 assert.throws(()=>validateServiceSummaryTables({...aggregatedDetail,im:{...aggregatedDetail.im,teacher:{...aggregatedDetail.im.teacher,rows:[{...imRow,im_answered_3m_count:50,im_question_count:49}]}}}),/CRM_SERVICE_SUMMARY_COUNTS_INVALID/);
 console.log("SERVICE_METRICS_OK");
 
-assert.doesNotThrow(()=>validateServiceGroup({teachers:[{小组:"其他组",老师:"甲"}]},"其他组"));
-assert.throws(()=>validateServiceGroup({teachers:[{小组:"屹柯组",老师:"乙"}]},"其他组"),/CRM_SERVICE_GROUP_MISMATCH/);
-assert.throws(()=>validateServiceGroup({teachers:[]},""),/CRM_SERVICE_GROUP_NOT_CONFIGURED/);
+const separate=buildServiceViews({im:{teacher:{headers:[...imHeaders,"voiceCallUsers"],rows:[{...imRow,voiceCallUsers:4,videoCallUsers:1,videoConnectedCount:2}]}}}).teachers[0];
+assert.equal(separate.voiceCallUsers,4);
+assert.equal(separate.videoCallUsers,1);
+assert.equal(separate.voiceConnectedCount,6);
+assert.equal(separate.videoConnectedCount,2);
+assert.equal(separate.callConnectedCount,8);
+
+// Repeated calls to one learner must display completed calls, not unique learners.
+const page=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const uiCalls=page.slice(page.indexOf('  function serviceCallMetrics(row)'),page.indexOf('  async function loadServiceCountMetricsV2'));
+const ui=vm.runInNewContext(`(()=>{${uiCalls};return {serviceCallSummary,serviceCallText,serviceCallCell}})()`,{serviceHasNumber:value=>value!=null&&value!==''&&Number.isFinite(Number(value)),serviceRate:value=>value==null?'—':`${value.toFixed(2)}%`});
+const repeated={...separate,callMetricsVersion:2};
+assert.equal(ui.serviceCallText(ui.serviceCallSummary([repeated],'video')),'接通 2 次 / 拨打 3 次');
+assert.match(ui.serviceCallCell(repeated,'video'),/^接通 2 次 \/ 拨打 3 次/);
+assert.match(ui.serviceCallCell(repeated,'video'),/通话人数 1 人/);
+
+assert.throws(()=>validateServiceSummaryTables({...source,today:{errors:{'im.teacher':'CRM_SERVICE_CALL_RECONCILIATION_FAILED'}}}),/TODAY_IM_INCOMPLETE/);

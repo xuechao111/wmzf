@@ -54,6 +54,7 @@ def _student_list(students: list[dict], include_makeup_detail: bool = False) -> 
 
 def build_overview_total_table(snapshot: dict) -> dict:
     rows = []
+    row_meta = []
     for item in snapshot.get("rows", []):
         current = item.get("current") or {}
         service = item.get("service") or {}
@@ -73,12 +74,8 @@ def build_overview_total_table(snapshot: dict) -> dict:
             current.get("arrivalRate"),
             _count_pair(current.get("arrivalAttend"), current.get("arrivalExpected")),
             current.get("liveRate"),
-            item.get("cohortLiveAverage"),
-            _rate_gap(item, "cohortLiveGap"),
             _count_pair(current.get("liveAttend"), current.get("liveExpected")),
             current.get("finishRate"),
-            item.get("cohortFinishAverage"),
-            _rate_gap(item, "cohortFinishGap"),
             _count_pair(current.get("evenDone"), current.get("evenExpected")),
             call.get("rate") if dial else None,
             f"{connected} / {dial}",
@@ -96,6 +93,10 @@ def build_overview_total_table(snapshot: dict) -> dict:
             int(_num(current.get("arrivedIncompleteStudents"), 0) or 0),
             (snapshot.get("weeks") or {}).get("current") or "",
         ])
+        row_meta.append({
+            "liveGap": _rate_gap(item, "cohortLiveGap"),
+            "finishGap": _rate_gap(item, "cohortFinishGap"),
+        })
 
     columns = [
         "课期",
@@ -104,12 +105,8 @@ def build_overview_total_table(snapshot: dict) -> dict:
         "第一节课到课率",
         "第一节课到课",
         "准时直播上座率",
-        "同期直播均值",
-        "直播Gap",
         "准时直播",
         "偶数课完课率",
-        "同期完课均值",
-        "完课Gap",
         "偶数课完课",
         "今日IM电话接通率",
         "IM电话接通/拨打",
@@ -130,14 +127,13 @@ def build_overview_total_table(snapshot: dict) -> dict:
     return {
         "columns": columns,
         "data": rows,
+        # Kept outside the visible table so the writer can color the actual
+        # live/finish cells without adding comparison columns back.
+        "rowMeta": row_meta,
         "dtypes": {
             "第一节课到课率": "float",
             "准时直播上座率": "float",
-            "同期直播均值": "float",
-            "直播Gap": "float",
             "偶数课完课率": "float",
-            "同期完课均值": "float",
-            "完课Gap": "float",
             "今日IM电话接通率": "float",
             "今日新增补课": "int",
             "上周准时本周未到": "int",
@@ -150,11 +146,7 @@ def build_overview_total_table(snapshot: dict) -> dict:
         "formats": {
             "第一节课到课率": "0.0%",
             "准时直播上座率": "0.0%",
-            "同期直播均值": "0.0%",
-            "直播Gap": "0.0%",
             "偶数课完课率": "0.0%",
-            "同期完课均值": "0.0%",
-            "完课Gap": "0.0%",
             "今日IM电话接通率": "0.0%",
         },
     }

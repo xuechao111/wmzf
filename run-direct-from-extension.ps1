@@ -1,4 +1,4 @@
-$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+﻿$sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
@@ -10,4 +10,8 @@ if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $pyth
     [IO.File]::WriteAllText($log, 'Python runtime not found.', [Text.Encoding]::UTF8)
     exit 1
 }
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUTF8 = '1'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 & $python -u $script --from-raw *> $log

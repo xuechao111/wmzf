@@ -1,23 +1,40 @@
 import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {randomUUID} from "node:crypto";
 
-const DASHBOARD_CONFIG=path.join(process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url)),"dashboard-config.json");
+const SOURCE_ROOT=path.dirname(fileURLToPath(import.meta.url));
+const RUNTIME_ROOT=path.resolve(process.env.HF_DASHBOARD_ROOT||path.join(SOURCE_ROOT,"instances","test"));
+const DASHBOARD_CONFIG=path.join(RUNTIME_ROOT,"dashboard-config.json");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
-const WORKBOOK = DASHBOARD_SETTINGS.renewalWorkbookUrl || "";
+const WORKBOOK = normalizeWorkbookUrl(DASHBOARD_SETTINGS.renewalWorkbookUrl || "");
 const CONFIGURED_SHEET_ID = DASHBOARD_SETTINGS.renewalSheetId || "";
 const TARGET_SHEET_NAME = "\u5956\u5b66\u91d1\u660e\u7ec6";
 const TARGET_END_COLUMN = "AM";
 const EXPECTED_COLUMN_COUNT = 39;
-const FILTERS = {"续费月份":"2026-08-01","续费节点":"首续","战队":"深圳战区"};
+const FILTERS = {"续费月份":"","续费节点":"首续","战队":"深圳战区"};
 const REQUIRED_COLUMNS = ["续费月份","用户ID","用户姓名","战区","战队","续费节点"];
 const CREDENTIAL_FILES = [
   process.env.CODEMAO_SCHOLARSHIP_CREDENTIALS_FILE,
-  "C:/Users/user/Desktop/Documents/编程猫管理skill/codemao-student-profile-extracted/codemao-course-data/sync.py",
 ].filter(Boolean);
 
 function normalizeText(value) {
   return String(value ?? "").replace(/\s+/g," ").trim();
+}
+
+function normalizeWorkbookUrl(value) {
+  const text=String(value||"").trim();
+  const link=text.match(/https:\/\/alidocs\.dingtalk\.com\/i\/nodes\/[A-Za-z0-9]+/);
+  return link?.[0] || "";
+}
+
+function selectDetailSheet(sheets, configuredId) {
+  const candidates=sheets.filter(sheet=>normalizeText(sheet?.name)===TARGET_SHEET_NAME);
+  const configured=candidates.find(sheet=>sheet.sheetId===configuredId);
+  if(candidates.length>1&&!configured)throw new Error("DINGTALK_RENEWAL_DETAIL_SHEET_AMBIGUOUS");
+  const target=configured||candidates[0];
+  if(!target)throw new Error(`DINGTALK_RENEWAL_DETAIL_SHEET_NOT_FOUND:${TARGET_SHEET_NAME}`);
+  return target.sheetId||target.name;
 }
 
 function normalizeDate(value) {
@@ -67,20 +84,69 @@ function readMcpCredentials() {
   return {url,token:token || ""};
 }
 
+async function mcpRelayEnvelope(credentials,body,timeoutMs) {
+  // Never infer the main instance from a missing environment variable.
+  const port=String(process.env.HF_DASHBOARD_PORT||"8766");
+  if(!/^876[56]$/.test(port))throw new Error("DINGTALK_RELAY_INSTANCE_PORT_INVALID");
+  const controller=new AbortController();
+  const healthTimer=setTimeout(()=>controller.abort(),4000);
+  try {
+    const response=await fetch(`http://127.0.0.1:${port}/health`,{cache:"no-store",signal:controller.signal});
+    if(!response.ok)throw new Error("DINGTALK_RELAY_INSTANCE_UNAVAILABLE");
+    const health=await response.json();
+    if(!health.ok||path.resolve(String(health.runtimeRoot||"" )).toLowerCase()!==RUNTIME_ROOT.toLowerCase())throw new Error("DINGTALK_RELAY_INSTANCE_MISMATCH");
+  } finally {clearTimeout(healthTimer);}
+  const directory=path.join(RUNTIME_ROOT,"run-data","mcp-relay");
+  fs.mkdirSync(directory,{recursive:true});
+  const id=randomUUID().replaceAll("-","");
+  const base=path.join(directory,id),requestFile=base+".request.json",responseFile=base+".response.json",temporary=base+".request.tmp";
+  try {
+    fs.writeFileSync(temporary,JSON.stringify({id,url:credentials.url,token:credentials.token||"",bodyBase64:Buffer.from(body,"utf8").toString("base64"),timeoutMs,createdAt:new Date().toISOString()}),{encoding:"utf8",mode:0o600});
+    fs.renameSync(temporary,requestFile);
+    const deadline=Date.now()+timeoutMs+45000;
+    while(Date.now()<deadline){
+      if(fs.existsSync(responseFile)){
+        const response=JSON.parse(fs.readFileSync(responseFile,"utf8").replace(/^\uFEFF/,""));
+        if(response.id!==id)throw new Error("DINGTALK_RELAY_RESPONSE_MISMATCH");
+        if(!response.ok)throw new Error(`DINGTALK_RELAY_FAILED:${Number(response.status)||"network"}`);
+        return JSON.parse(String(response.bodyText||""));
+      }
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    throw new Error("DINGTALK_RELAY_TIMEOUT:请确认当前工作台连接器保持启用");
+  } finally {
+    for(const suffix of [".request.tmp",".request.json",".response.json",".claimed"]){try{fs.rmSync(base+suffix,{force:true});}catch{}}
+  }
+}
+
 async function mcpCall(name,args,timeoutMs=180000) {
   const {url,token} = readMcpCredentials();
+  const body=JSON.stringify({jsonrpc:"2.0",method:"tools/call",params:{name,arguments:args},id:1});
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(),timeoutMs);
+  let envelope;
   try {
     const headers = {"content-type":"application/json","accept":"application/json"};
     if (token) headers.authorization = `Bearer ${token}`;
-    const response = await fetch(url,{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",method:"tools/call",params:{name,arguments:args},id:1}),signal:controller.signal});
+    let response;
+    try {response=await fetch(url,{method:"POST",headers,body,signal:controller.signal});}
+    catch(error){
+      if(!(error instanceof TypeError)&&!["AbortError","TimeoutError"].includes(error?.name))throw error;
+      clearTimeout(timer);
+      envelope=await mcpRelayEnvelope({url,token},body,timeoutMs);
+    }
+    if(response){
     if (!response.ok) throw new Error(`DINGTALK_MCP_HTTP_${response.status}`);
-    const envelope = await response.json();
+    envelope = await response.json();
+    }
+    if(!envelope||typeof envelope!=="object"||!envelope.result)throw new Error("DINGTALK_MCP_RESPONSE_INVALID");
     if (envelope.error) throw new Error(`DINGTALK_MCP_ERROR:${JSON.stringify(envelope.error)}`);
     const text = envelope.result?.content?.find(item => item.type === "text")?.text;
     const result = text ? JSON.parse(text) : envelope.result;
-    if (result?.success === false) throw new Error(`DINGTALK_TOOL_ERROR:${result.errorMsg || JSON.stringify(result)}`);
+    if (result?.success === false) {
+      if (result.errorCode === "forbidden.accessDenied" || /access denied/i.test(result.errorMsg || "")) throw new Error(`DINGTALK_ACCESS_DENIED:${name}`);
+      throw new Error(`DINGTALK_TOOL_ERROR:${result.errorMsg || JSON.stringify(result)}`);
+    }
     return result;
   } finally { clearTimeout(timer); }
 }
@@ -96,8 +162,14 @@ function findRows(value) {
 async function writeAndVerify(source) {
   const sheetId = await resolveTargetSheetId();
   const headerResult = await mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A1:${TARGET_END_COLUMN}1`});
-  const targetHeaders = (findRows(headerResult)?.[0] || []).map(normalizeText);
+  let targetHeaders = (findRows(headerResult)?.[0] || []).map(normalizeText);
+  if (!targetHeaders.some(Boolean)) {
+    const info=await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId});
+    if (info.nonEmptyRange || Number(info.lastNonEmptyRow)>=0) throw new Error("DINGTALK_HEADER_EMPTY_WITH_EXISTING_DATA");
+    targetHeaders=[...source.headers];
+  }
   if (targetHeaders.length !== EXPECTED_COLUMN_COUNT || targetHeaders.some(header => !header)) throw new Error(`DINGTALK_HEADER_INVALID:${targetHeaders.length}`);
+  if (new Set(targetHeaders).size!==targetHeaders.length) throw new Error("DINGTALK_HEADER_DUPLICATED");
   const missing = targetHeaders.filter(header => !source.headers.includes(header));
   if (missing.length) throw new Error(`CRM_MISSING_TARGET_COLUMNS:${missing.join("|")}`);
   const tableRows = source.rows.map(row => Object.fromEntries(targetHeaders.map(header => [header,row[header] ?? ""])));
@@ -127,21 +199,23 @@ async function writeAndVerify(source) {
 }
 
 async function resolveTargetSheetId() {
-  if (CONFIGURED_SHEET_ID) return CONFIGURED_SHEET_ID;
   const listing=await mcpCall("get_all_sheets",{nodeId:WORKBOOK});
   const sheets=Array.isArray(listing)?listing:(listing?.sheets||listing?.data?.sheets||[]);
-  const target=sheets.find(sheet=>normalizeText(sheet?.name)===TARGET_SHEET_NAME);
-  if (!target) throw new Error(`DINGTALK_RENEWAL_DETAIL_SHEET_NOT_FOUND:${TARGET_SHEET_NAME}`);
-  return target.sheetId||target.name;
+  return selectDetailSheet(sheets,CONFIGURED_SHEET_ID);
 }
 
-async function updateDashboardTimestamp() {
+async function resolveDashboardSheetId() {
   const listing=await mcpCall("get_all_sheets",{nodeId:WORKBOOK});
   const sheets=Array.isArray(listing)?listing:(listing?.sheets||listing?.data?.sheets||[]);
   const dashboard=sheets.find(sheet=>normalizeText(sheet?.name)==="续费看板");
-  if (!dashboard) throw new Error("DINGTALK_RENEWAL_DASHBOARD_NOT_FOUND");
-  const sheetId=dashboard.sheetId||dashboard.name;
-  const timestamp=new Date().toLocaleString("sv-SE",{timeZone:"Asia/Shanghai",hour12:false});
+  if (!dashboard) return null;
+  return dashboard.sheetId||dashboard.name;
+}
+
+async function updateDashboardTimestamp(sheetId, existingTimestamp=null) {
+  sheetId ||= await resolveDashboardSheetId();
+  if (!sheetId) throw new Error("DINGTALK_RENEWAL_DASHBOARD_NOT_FOUND");
+  const timestamp=existingTimestamp||new Date().toLocaleString("sv-SE",{timeZone:"Asia/Shanghai",hour12:false});
   const value=`最新更新时间：${timestamp}`;
   const mergedRange="A1:H1";
   await mcpCall("unmerge_range",{nodeId:WORKBOOK,sheetId,rangeAddress:mergedRange});
@@ -154,6 +228,8 @@ async function updateDashboardTimestamp() {
     await mcpCall("merge_cells",{nodeId:WORKBOOK,sheetId,rangeAddress:mergedRange,mergeType:"mergeAll"});
   }
   if (writeError) throw writeError;
+  const repeat=value=>[Array(8).fill(value)];
+  await mcpCall("update_range",{nodeId:WORKBOOK,sheetId,rangeAddress:mergedRange,fontColors:repeat("#19334D"),fontWeights:repeat("bold"),fontSizes:repeat(14),horizontalAlignments:repeat("center"),verticalAlignments:repeat("middle"),wordWrap:"autoWrap"});
   const verification=await mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:"A1"});
   const actual=normalizeText(findRows(verification)?.[0]?.[0]);
   if (actual!==value) throw new Error(`VERIFY_DASHBOARD_TIMESTAMP_MISMATCH:${actual}`);
@@ -170,15 +246,36 @@ async function main() {
   if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(selectedMonth)) throw new Error("CRM_RENEWAL_MONTH_INVALID");
   FILTERS["续费月份"]=selectedMonth;
   source.headers=source.headers.map(normalizeText);
+  if(source.headers.length!==EXPECTED_COLUMN_COUNT || source.headers.some(header=>!header) || new Set(source.headers).size!==source.headers.length)throw new Error("CRM_HEADERS_INVALID");
+  if(source.rowcount!=null && Number(source.rowcount)!==source.rows.length)throw new Error("CRM_ROW_COUNT_MISMATCH");
   validateSource(source.headers,source.rows);
   console.log(`CRM_OK rows=${source.rows.length} columns=${source.headers.length}`);
+  const dashboardSheetId=await resolveDashboardSheetId();
   const verification=await writeAndVerify(source);
-  const dashboardTimestamp=await updateDashboardTimestamp();
+  const dashboardTimestamp=dashboardSheetId?await updateDashboardTimestamp(dashboardSheetId):new Date().toLocaleString("sv-SE",{timeZone:"Asia/Shanghai",hour12:false});
   console.log(`SYNC_OK rows=${verification.rows} lastRow=${verification.lastRow}`);
-  console.log(`DASHBOARD_TIMESTAMP_OK time=${dashboardTimestamp}`);
+  console.log(`${dashboardSheetId?"DASHBOARD_TIMESTAMP_OK":"LOCAL_TIMESTAMP_OK"} time=${dashboardTimestamp}`);
 }
 
-const task=process.argv.includes("--timestamp-only")
+function selfTest(){
+  const assert=(ok)=>{if(!ok)throw new Error("SELF_TEST_FAILED")};
+  const rejects=fn=>{try{fn()}catch{return}throw new Error("SELF_TEST_EXPECTED_REJECTION")};
+  assert(normalizeWorkbookUrl("[表格](https://alidocs.dingtalk.com/i/nodes/abc123?x=1)")==="https://alidocs.dingtalk.com/i/nodes/abc123");
+  assert(!normalizeWorkbookUrl("https://example.com/i/nodes/abc"));
+  assert(selectDetailSheet([{sheetId:"old",name:"其他表"},{sheetId:"new",name:TARGET_SHEET_NAME}],"old")==="new");
+  rejects(()=>selectDetailSheet([{sheetId:"old",name:"其他表"}],"old"));
+  rejects(()=>selectDetailSheet([{sheetId:"a",name:TARGET_SHEET_NAME},{sheetId:"b",name:TARGET_SHEET_NAME}],"old"));
+  for(const month of ["2026-12-01","2027-01-01","2028-02-01"]){
+    FILTERS["续费月份"]=month;
+    const row={"续费月份":month,"用户ID":"test","用户姓名":"test","战区":"test","战队":"深圳战区","续费节点":"首续"};
+    validateSource(REQUIRED_COLUMNS,[row]);
+    rejects(()=>validateSource(REQUIRED_COLUMNS,[{...row,"续费月份":"2026-08-01"}]));
+    rejects(()=>validateSource(REQUIRED_COLUMNS,[row,row]));
+  }
+  console.log("SELF_TEST_OK: workbook links, target isolation, month switching, wrong-month and duplicate guards");
+}
+
+const task=process.argv.includes("--self-test") ? Promise.resolve().then(selfTest) : process.argv.includes("--timestamp-only")
   ? updateDashboardTimestamp().then(timestamp=>console.log(`DASHBOARD_TIMESTAMP_OK time=${timestamp}`))
   : main();
 task.catch(error=>{

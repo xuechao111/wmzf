@@ -103,34 +103,19 @@ def service_number(source, key):
 
 
 def daily_call_metrics(source):
-    voice_dial = service_number(source, "voiceDialStudents")
-    if voice_dial is None:
-        voice_dial = service_number(source, "voiceDialUsers")
-    if voice_dial is None:
-        voice_dial = service_number(source, "voiceDialCount")
-    video_dial = service_number(source, "videoDialStudents")
-    if video_dial is None:
-        video_dial = service_number(source, "videoDialUsers")
-    if video_dial is None:
-        video_dial = service_number(source, "videoDialCount")
-    video_connected = service_number(source, "videoCallUsers")
-    if video_connected is None:
-        video_connected = service_number(source, "videoConnectedCount")
-    total_connected = service_number(source, "callUsers")
+    voice_dial = service_number(source, "voiceDialCount")
+    video_dial = service_number(source, "videoDialCount")
+    video_connected = service_number(source, "videoConnectedCount")
     voice_connected = service_number(source, "voiceConnectedCount")
-    if total_connected is not None and video_connected is not None:
-        voice_connected = max(0, total_connected - video_connected)
-    elif voice_connected is None:
-        voice_connected = service_number(source, "callUsers")
     dial_total = int((voice_dial or 0) + (video_dial or 0))
-    connected_total = int(total_connected if total_connected is not None else (voice_connected or 0) + (video_connected or 0))
+    connected_total = int((voice_connected or 0) + (video_connected or 0))
     return {
-        "voiceDial": int(voice_dial or 0),
-        "voiceConnected": int(voice_connected or 0),
-        "videoDial": int(video_dial or 0),
-        "videoConnected": int(video_connected or 0),
-        "dial": dial_total,
-        "connected": connected_total,
+        "voiceDial": int(voice_dial) if voice_dial is not None else None,
+        "voiceConnected": int(voice_connected) if voice_connected is not None else None,
+        "videoDial": int(video_dial) if video_dial is not None else None,
+        "videoConnected": int(video_connected) if video_connected is not None else None,
+        "dial": dial_total if voice_dial is not None and video_dial is not None else None,
+        "connected": connected_total if voice_connected is not None and video_connected is not None else None,
         "rate": pct(connected_total, dial_total),
     }
 
@@ -176,7 +161,7 @@ def timely_live_comparison(class_rows):
     slot_order = {"周五晚": 0, "周六午": 1, "周六晚": 2}
     grouped = {}
     for row in class_rows:
-        if row["current"]["liveExpected"] <= 0:
+        if row["current"]["liveExpected"] <= 0 or row["current"].get("detailLiveFallbacks") or row["previous"].get("detailLiveFallbacks"):
             continue
         grouped.setdefault(row["slot"], []).append(row)
 
@@ -432,6 +417,21 @@ def iter_json_array(path, chunk_size=1024 * 1024):
                 return
 
 
+def course_package(block):
+    # These are the two CRM curriculum catalogs currently used by the workbook.
+    # Unknown catalogs stay separate instead of being merged into either package.
+    lessons = sorted(block.get("lessons") or [], key=lambda x: int(x.get("course_number") or 0))
+    for key in ("packageName", "coursePackageName", "productName"):
+        name = str(block.get("info", {}).get(key) or "")
+        if "进阶" in name: return "进阶"
+        if "高阶" in name: return "高阶"
+    first = lessons[0] if lessons else {}
+    title = str(first.get("course_name") or "")
+    if title == "1-C++基础框架": return "进阶"
+    if title == "51-认识一维数组": return "高阶"
+    return "课包待确认-" + str(first.get("course_id") or block.get("termId") or "未知")
+
+
 def eligible_block(block, now):
     lessons = block.get("lessons") or []
     unlocks = [int(x.get("unlock_time") or 0) for x in lessons if int(x.get("unlock_time") or 0) > 0]
@@ -443,11 +443,25 @@ def eligible_block(block, now):
     )
 
 
+def workbook_teacher_groups():
+    try:
+        metadata = json.loads((ROOT / "run-data/class-group-metadata.json").read_text(encoding="utf-8"))
+        raw = json.loads(RAW.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    groups = {name: set(values) for name, values in metadata.get("teachers", {}).items()}
+    for block in raw:
+        teacher = teacher_name(block.get("info", {}).get("teacherName"))
+        groups.setdefault(teacher, set()).update(metadata.get("classes", {}).get(str(block.get("classId")), []))
+    return {name: next(iter(values)) for name, values in groups.items() if len(values) == 1}
+
+
 def main():
     try:
         dashboard_config = json.loads(CONFIG.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError, TypeError):
         dashboard_config = {}
+    group_names = workbook_teacher_groups()
     comparison_teachers = {
         str(name).strip() for name in dashboard_config.get("comparisonTeachers", [])
         if str(name).strip()
@@ -455,6 +469,7 @@ def main():
     if not RAW.exists():
         raise RuntimeError("尚未生成 CRM 最新数据，请先点击“更新组内教学数据”")
     now = int(time.time())
+    weekly_classes = []
     today = datetime.fromtimestamp(now, CN).replace(hour=0, minute=0, second=0, microsecond=0)
     today_start = int(today.timestamp())
     tomorrow_start = int((today + timedelta(days=1)).timestamp())
@@ -483,12 +498,14 @@ def main():
                 and int(lesson.get("course_id") or 0) in populated_course_ids
             }
         opened_weeks.update(block_weeks)
-        cohort_opened_weeks.setdefault(cohort_start, set()).update(block_weeks)
+        cohort_opened_weeks.setdefault((course_package(block), cohort_start), set()).update(block_weeks)
     opened_weeks = sorted(opened_weeks)
     if not opened_weeks:
         raise RuntimeError("CRM 数据中没有已开课课程")
     current_start = max(opened_weeks)
     previous_start = previous_opened_week(opened_weeks, current_start)
+    weekly_current_start = week_start(now)
+    weekly_previous_start = previous_opened_week(opened_weeks, weekly_current_start)
     labels = {"current": datetime.fromtimestamp(current_start, CN).strftime("%m月%d日周"), "previous": datetime.fromtimestamp(previous_start, CN).strftime("%m月%d日周")}
     teachers = {}
     classes = []
@@ -502,7 +519,9 @@ def main():
             continue
         first_time = min(int(x.get("unlock_time") or 0) for x in block["lessons"] if int(x.get("unlock_time") or 0) > 0)
         cohort_start = week_start(first_time)
-        cohort = datetime.fromtimestamp(cohort_start, CN).strftime("%Y-%m-%d周")
+        package = course_package(block)
+        cohort_date = datetime.fromtimestamp(cohort_start, CN).strftime("%Y-%m-%d周")
+        cohort = package + " · " + cohort_date
         first_label = datetime.fromtimestamp(first_time, CN).strftime("%Y-%m-%d %H:%M")
         lesson_by_id = {int(item.get("course_id") or 0): item for item in block.get("lessons", [])}
         roster = {}
@@ -531,7 +550,7 @@ def main():
                 daily_makeup_records.setdefault((cohort, teacher), []).append(record)
         for attendance in (block.get("liveAttendance") or {}).values():
             roster.update({str(uid): str(name or "") for uid, name in (attendance.get("names") or {}).items()})
-        cohort_weeks = cohort_opened_weeks.get(cohort_start) or {current_start}
+        cohort_weeks = cohort_opened_weeks.get((package, cohort_start)) or {current_start}
         block_current_start = max(cohort_weeks)
         block_previous_start = previous_opened_week(cohort_weeks, block_current_start)
         allow_detail_live = teacher in comparison_teachers
@@ -540,13 +559,31 @@ def main():
         recent_time = current["latestOpenedTime"] or previous["latestOpenedTime"] or first_time
         class_current = public_metrics(current, roster)
         class_previous = public_metrics(previous, roster)
-        class_row = {"classId": int(block.get("classId") or info.get("classId") or 0), "className": str(info.get("className") or ""), "teacher": teacher, "cohort": cohort, "slot": slot_label(first_time), "recentClassTime": datetime.fromtimestamp(recent_time, CN).strftime("%Y-%m-%d %H:%M"),
+        class_row = {"classId": int(block.get("classId") or info.get("classId") or 0), "className": str(info.get("className") or ""), "teacher": teacher, "coursePackage": package, "cohortDate": cohort_date, "cohort": cohort, "slot": slot_label(first_time), "recentClassTime": datetime.fromtimestamp(recent_time, CN).strftime("%Y-%m-%d %H:%M"),
                      "students": [{"id": uid, "name": name} for uid, name in sorted(roster.items(), key=lambda x: x[1])],
                      "current": class_current, "previous": class_previous,
                      "liveDelta": class_current["liveRate"] - class_previous["liveRate"] if class_previous["liveExpected"] else None,
                      "replayDelta": class_current["replayRate"] - class_previous["replayRate"],
                      "finishDelta": class_current["finishRate"] - class_previous["finishRate"]}
         class_row["currentWeek"] = datetime.fromtimestamp(block_current_start, CN).strftime("%Y-%m-%d")
+        weekly_row = {key: class_row[key] for key in ("classId", "teacher", "coursePackage", "cohort", "slot", "students")}
+        # Keep the weekly comparison to the previous opened week and the
+        # currently opened week. Future-week placeholders are intentionally
+        # excluded so the table does not show a second empty subtable.
+        # A live-room roster includes past/transferred learners. It is useful
+        # for historical attendance but must never enlarge the active roster.
+        # Use the latest collected lesson's learner details for this class.
+        from audit_weekly_rosters import latest_class_roster
+        roster_course_id, active_roster = latest_class_roster(block)
+        weekly_row["students"] = [{"id": uid, "name": name} for uid, name in sorted(active_roster.items())]
+        weekly_row["rosterSource"] = "latest-course-detail"
+        weekly_row["rosterCourseId"] = roster_course_id
+        weekly_row["attendanceWeeks"] = {
+            datetime.fromtimestamp(start, CN).strftime("%Y-%m-%d"): public_metrics(
+                period_metrics(block, start, start + 7 * 86400, now, allow_detail_live), roster
+            ) for start in (weekly_previous_start, weekly_current_start)
+        }
+        weekly_classes.append(weekly_row)
         class_row["liveLessonNumbers"] = [
             int(first.get("course_number") or 0)
             for first, second in lesson_pairs(block)
@@ -560,7 +597,7 @@ def main():
             classes.append(class_row)
         teacher_key = (cohort, teacher)
         if teacher_key not in teachers:
-            teachers[teacher_key] = {"teacher": teacher, "cohort": cohort, "currentStart": block_current_start, "cohorts": set(), "firstTimes": [], "students": {},
+            teachers[teacher_key] = {"teacher": teacher, "coursePackage": package, "cohortDate": cohort_date, "cohort": cohort, "currentStart": block_current_start, "previousStart": block_previous_start, "cohorts": set(), "firstTimes": [], "students": {},
                                  "current": {"arrivalExpected": 0, "arrivalAttend": 0, "liveExpected": 0, "liveAttend": 0, "replayAttend": 0, "evenExpected": 0, "evenDone": 0, "arrivedIncomplete": 0, "missingLiveBoards": 0, "detailLiveFallbacks": 0, "incompleteIds": set(), "arrivedIncompleteIds": set(), "liveExpectedIds": set(), "liveAttendIds": set(), "liveAbsentIds": set(), "replayIds": set(), "latestOpenedTime": 0},
                                  "previous": {"arrivalExpected": 0, "arrivalAttend": 0, "liveExpected": 0, "liveAttend": 0, "replayAttend": 0, "evenExpected": 0, "evenDone": 0, "arrivedIncomplete": 0, "missingLiveBoards": 0, "detailLiveFallbacks": 0, "incompleteIds": set(), "arrivedIncompleteIds": set(), "liveExpectedIds": set(), "liveAttendIds": set(), "liveAbsentIds": set(), "replayIds": set(), "latestOpenedTime": 0}}
         t = teachers[teacher_key]
@@ -597,9 +634,10 @@ def main():
         c, p = t["current"], t["previous"]
         first = min(t["firstTimes"])
         recent_time = c["latestOpenedTime"] or p["latestOpenedTime"] or first
-        row = {"teacher": t["teacher"], "cohort": t["cohort"], "currentWeek": datetime.fromtimestamp(t["currentStart"], CN).strftime("%Y-%m-%d周"), "recentClassTime": datetime.fromtimestamp(recent_time, CN).strftime("%Y-%m-%d %H:%M"),
+        row = {"teacher": t["teacher"], "coursePackage": t["coursePackage"], "cohortDate": t["cohortDate"], "cohort": t["cohort"], "currentWeek": datetime.fromtimestamp(t["currentStart"], CN).strftime("%Y-%m-%d周"), "recentClassTime": datetime.fromtimestamp(recent_time, CN).strftime("%Y-%m-%d %H:%M"),
                "current": public_metrics(c, t["students"]), "previous": public_metrics(p, t["students"], False)}
         teacher_classes = [item for item in classes if item["teacher"] == t["teacher"] and item["cohort"] == t["cohort"]]
+        row["previousWeek"] = datetime.fromtimestamp(t["previousStart"], CN).strftime("%Y-%m-%d周")
         row["timelyLiveComparison"] = timely_live_comparison(teacher_classes)
         row["liveDelta"] = row["timelyLiveComparison"]["gap"]
         row["replayDelta"] = row["current"]["replayRate"] - row["previous"]["replayRate"]
@@ -615,6 +653,7 @@ def main():
             except (TypeError, ValueError):
                 return None
         row["service"] = {
+            "groupName": group_names.get(t["teacher"], ""),
             "employeeId": str(service.get("\u5de5\u53f7") or ""),
             "imRate": service_rate("im"),
             "wecomRate": service_rate("wecom"),
@@ -636,14 +675,15 @@ def main():
     by_cohort = {}
     for row in rows: by_cohort.setdefault(row["cohort"], []).append(row)
     for peers in by_cohort.values():
-        live_avg = sum(x["current"]["liveRate"] for x in peers) / len(peers)
+        verified_peers = [x for x in peers if not x["current"].get("detailLiveFallbacks") and not x["current"].get("missingLiveBoards") and x["current"]["liveExpected"] > 0]
+        live_avg = sum(x["current"]["liveRate"] for x in verified_peers) / len(verified_peers) if verified_peers else None
         finish_avg = sum(x["current"]["finishRate"] for x in peers) / len(peers)
         for row in peers:
-            row["liveAnomaly"] = row["current"]["liveRate"] < live_avg
+            row["liveAnomaly"] = row in verified_peers and live_avg is not None and row["current"]["liveRate"] < live_avg
             row["finishAnomaly"] = row["current"]["finishRate"] < finish_avg
             row["cohortLiveAverage"] = live_avg
             row["cohortFinishAverage"] = finish_avg
-            row["cohortLiveGap"] = row["current"]["liveRate"] - live_avg
+            row["cohortLiveGap"] = row["current"]["liveRate"] - live_avg if row in verified_peers and live_avg is not None else None
             row["cohortFinishGap"] = row["current"]["finishRate"] - finish_avg
     arrival_expected = sum(x["current"]["arrivalExpected"] for x in rows); live_expected = sum(x["current"]["liveExpected"] for x in rows); even_expected = sum(x["current"]["evenExpected"] for x in rows)
     group_teacher_names = {
@@ -661,12 +701,12 @@ def main():
             makeup_by_teacher[row["teacher"]][student["id"]] = student
         calls_by_teacher[row["teacher"]] = row.get("service", {}).get("dailyCall") or daily_call_metrics({})
     call_totals = {
-        "dial": sum(item.get("dial", 0) for item in calls_by_teacher.values()),
-        "connected": sum(item.get("connected", 0) for item in calls_by_teacher.values()),
-        "voiceDial": sum(item.get("voiceDial", 0) for item in calls_by_teacher.values()),
-        "voiceConnected": sum(item.get("voiceConnected", 0) for item in calls_by_teacher.values()),
-        "videoDial": sum(item.get("videoDial", 0) for item in calls_by_teacher.values()),
-        "videoConnected": sum(item.get("videoConnected", 0) for item in calls_by_teacher.values()),
+        "dial": sum(item.get("dial") or 0 for item in calls_by_teacher.values()),
+        "connected": sum(item.get("connected") or 0 for item in calls_by_teacher.values()),
+        "voiceDial": sum(item.get("voiceDial") or 0 for item in calls_by_teacher.values()),
+        "voiceConnected": sum(item.get("voiceConnected") or 0 for item in calls_by_teacher.values()),
+        "videoDial": sum(item.get("videoDial") or 0 for item in calls_by_teacher.values()),
+        "videoConnected": sum(item.get("videoConnected") or 0 for item in calls_by_teacher.values()),
     }
     call_totals["rate"] = pct(call_totals["connected"], call_totals["dial"])
     group_daily = {
@@ -703,9 +743,9 @@ def main():
             ),
         },
     }
-    cohort_week_labels = {datetime.fromtimestamp(start, CN).strftime("%Y-%m-%d周"): datetime.fromtimestamp(max(weeks), CN).strftime("%Y-%m-%d周") for start, weeks in cohort_opened_weeks.items() if weeks}
-    snapshot = {"updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "serviceUpdatedAt": service_updated_at, "weeks": labels, "cohortWeeks": cohort_week_labels, "cohorts": sorted(by_cohort), "rows": rows, "classes": classes,
-                "summary": {"teachers": len(rows), "classes": len(classes), "arrivalRate": pct(sum(x["current"]["arrivalAttend"] for x in rows), arrival_expected), "liveRate": pct(sum(x["current"]["liveAttend"] for x in rows), live_expected), "replayRate": pct(sum(x["current"]["replayAttend"] for x in rows), live_expected), "finishRate": pct(sum(x["current"]["evenDone"] for x in rows), even_expected)},
+    cohort_week_labels = {package + " · " + datetime.fromtimestamp(start, CN).strftime("%Y-%m-%d周"): datetime.fromtimestamp(max(weeks), CN).strftime("%Y-%m-%d周") for (package, start), weeks in cohort_opened_weeks.items() if weeks}
+    snapshot = {"updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "serviceUpdatedAt": service_updated_at, "weeks": labels, "weeklyAttendanceWeeks": [datetime.fromtimestamp(weekly_previous_start, CN).strftime("%Y-%m-%d"), datetime.fromtimestamp(weekly_current_start, CN).strftime("%Y-%m-%d")], "cohortWeeks": cohort_week_labels, "cohorts": sorted(by_cohort), "rows": rows, "classes": classes, "weeklyAttendanceClasses": weekly_classes,
+                "summary": {"teachers": len(rows), "classes": len(classes), "arrivalRate": pct(sum(x["current"]["arrivalAttend"] for x in rows), arrival_expected), "liveRate": pct(sum(x["current"]["liveAttend"] for x in rows if not x["current"].get("detailLiveFallbacks")), sum(x["current"]["liveExpected"] for x in rows if not x["current"].get("detailLiveFallbacks"))), "liveUnverifiedTeachers": sorted({x["teacher"] for x in rows if x["current"].get("detailLiveFallbacks")}), "replayRate": pct(sum(x["current"]["replayAttend"] for x in rows), live_expected), "finishRate": pct(sum(x["current"]["evenDone"] for x in rows), even_expected)},
                 "groupDaily": group_daily}
     OUT.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
 
