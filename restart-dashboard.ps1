@@ -1,16 +1,11 @@
 ﻿param(
-    [Parameter(Mandatory=$true)][string]$InstallRoot,
-    [Parameter(Mandatory=$true)][string]$RuntimeRoot,
-    [int]$Port = 8766,
-    [string]$Instance = '',
-    [int]$ServicePid = 0
+ [Parameter(Mandatory=$true)][string]$InstallRoot,
+ [Parameter(Mandatory=$true)][string]$RuntimeRoot,
+ [int]$Port=8766,[string]$Instance='', [int]$ServicePid=0
 )
-
-Start-Sleep -Seconds 2
-if ($ServicePid -gt 0) { Stop-Process -Id $ServicePid -Force -ErrorAction SilentlyContinue }
-$env:HF_DASHBOARD_SOURCE_ROOT = $InstallRoot
-$env:HF_DASHBOARD_ROOT = $RuntimeRoot
-$env:HF_DASHBOARD_PORT = [string]$Port
-$env:HF_DASHBOARD_INSTANCE = $Instance
-$env:HF_DASHBOARD_NO_OPEN = '1'
-& (Join-Path $InstallRoot 'bridge.ps1')
+$ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $InstallRoot $RuntimeRoot $Port 8766
+# The launcher checks source ownership and all active tasks before stopping a service.
+# Never trust a supplied PID as authority to terminate a process.
+& (Join-Path $InstallRoot 'start-workbench.ps1') -NoBrowser -Port 8766

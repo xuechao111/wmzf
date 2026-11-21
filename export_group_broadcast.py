@@ -5,6 +5,7 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
+from runtime_paths import runtime_root
 import os
 
 from PIL import Image, ImageDraw, ImageFont
@@ -68,8 +69,8 @@ def export(snapshot_path: Path, destination: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--snapshot", type=Path, default=Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent / "instances" / "test") / "dashboard-snapshot.json")
-    parser.add_argument("--output", type=Path, default=Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent / "instances" / "test") / "run-data" / "group-broadcast")
+    parser.add_argument("--snapshot", type=Path, default=runtime_root() / "dashboard-snapshot.json")
+    parser.add_argument("--output", type=Path, default=runtime_root() / "run-data" / "group-broadcast")
     args = parser.parse_args()
     results = export(args.snapshot, args.output)
     print(json.dumps({"images": len(results), "cohorts": len({r['cohort'] for r in results}), "output": str(args.output.resolve())}, ensure_ascii=False))

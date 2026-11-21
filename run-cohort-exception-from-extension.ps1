@@ -3,8 +3,11 @@
 )
 
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) { $RuntimeRoot = $sourceRoot }
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) { $RuntimeRoot = if(Test-Path (Join-Path $sourceRoot 'dashboard-config.json')){$sourceRoot}else{Join-Path $sourceRoot 'instances/test'} }
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $sourceRoot $RuntimeRoot $(if($env:HF_DASHBOARD_PORT){[int]$env:HF_DASHBOARD_PORT}else{8766}) 8766
 $env:HF_DASHBOARD_ROOT = $RuntimeRoot
+$env:HF_DASHBOARD_PORT='8766'
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 $portablePython = Join-Path $sourceRoot 'runtime\python\python.exe'
 $python = if (Test-Path -LiteralPath $portablePython) { $portablePython } elseif (Test-Path -LiteralPath $bundledPython) { $bundledPython } else { (Get-Command python.exe -ErrorAction SilentlyContinue).Source }
@@ -32,6 +35,10 @@ if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $pyth
     exit 1
 }
 
+$taskLease=$null
+try {
+    try { $taskLease=[IO.File]::Open((Join-Path $RuntimeRoot 'cohort-exception-update.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+    catch { Write-Output '课期异常任务已在运行，本次重复请求已跳过。'; exit 2 }
 Write-CohortStatus 'running' '正在计算课期异常学员并写入钉钉…' '仅写入“课期异常”子表。' 'writer'
 & $python -u $script --from-raw *> $log
 $exitCode = $LASTEXITCODE
@@ -47,3 +54,10 @@ if (Test-Path -LiteralPath $log) {
 }
 Write-CohortStatus 'error' '课期异常更新失败。' $detail 'writer'
 exit $exitCode
+
+} catch {
+    Write-CohortStatus 'error' '课期异常更新失败。' $_.Exception.Message 'writer'
+    exit 1
+} finally {
+    if ($taskLease) { $taskLease.Dispose() }
+}

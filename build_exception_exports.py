@@ -7,7 +7,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
+from runtime_paths import runtime_root
+ROOT = runtime_root()
 RAW = ROOT / "run-data" / "group-lessons-raw.json"
 OUT = ROOT / "run-data" / "exception-export-tables.json"
 CLASSES = ROOT / "run-data" / "classes.json"
@@ -358,6 +359,8 @@ def main():
     main_term_by_class = {int(pair[0]): int(pair[1]) for pair in class_pairs if len(pair) >= 2}
     now = int(time.time())
     blocks = [b for b in raw if not b.get("excluded") and clean_teacher(b.get("info", {}).get("teacherName")) != "薛超" and b.get("lessons")]
+    from get_dashboard_snapshot import cohort_teaching_weeks, course_package, lesson_pairs as dashboard_lesson_pairs
+    cohort_weeks = cohort_teaching_weeks(blocks, now)
     current = monday(now)
     opened_weeks = set()
     for block in blocks:
@@ -442,6 +445,13 @@ def main():
             ordered = sorted(same_time_lessons, key=lambda item: (int(item.get("course_number") or 0), int(item.get("course_id") or 0)))
             if len(ordered) >= 2:
                 lesson_pairs.append((ordered[0], ordered[1]))
+        lesson_pairs = dashboard_lesson_pairs(block)
+        unlocks = [int(lesson.get("unlock_time") or 0) for lesson in block["lessons"] if int(lesson.get("unlock_time") or 0) > 0]
+        cohort_key = (course_package(block), monday(min(unlocks))) if unlocks else None
+        block_weeks = cohort_weeks.get(cohort_key) or set()
+        block_start = max(block_weeks) if block_weeks else start
+        block_end = block_start + 7 * 86400
+        block_period = f"{datetime.fromtimestamp(block_start, CN):%Y-%m-%d}至{datetime.fromtimestamp(block_end - 1, CN):%Y-%m-%d}"
         for first, even in lesson_pairs:
             live_number = int(first.get("course_number") or 0)
             even_time = int(even.get("unlock_time") or 0)
@@ -449,7 +459,7 @@ def main():
             first_time = int(first.get("unlock_time") or 0)
             first_rows = [x for x in items if int(x.get("course_id") or 0) == int(first.get("course_id") or 0)]
             first_arrived_ids = {str(x.get("user_id")) for x in first_rows if x.get("user_id") and bool(x.get("is_open"))}
-            pair_open = start <= even_time < end and even_time <= now
+            pair_open = block_start <= even_time < block_end and even_time <= now
             if pair_open:
                 finished_ids = {str(x.get("user_id")) for x in even_rows if x.get("user_id") and bool(x.get("is_finish"))}
                 arrived_unfinished_ids = first_arrived_ids - finished_ids
@@ -464,7 +474,7 @@ def main():
                     if not uid:
                         continue
                     key = (teacher, class_id, uid)
-                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
+                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "period": block_period, "reasons": set()})
                     if duration_over_two_hours(row):
                         rec["reasons"].add("完课时长大于2小时")
                     if not row.get("is_finish"):
@@ -481,7 +491,7 @@ def main():
                 teacher_total["arrival_expected"] += len(live_items)
                 teacher_total["arrival_attend"] += len(first_arrived_ids)
                 board = (block.get("liveAttendance") or {}).get(str(live_number)) or (block.get("liveAttendance") or {}).get(live_number)
-                if block.get("liveAttendance") and not board:
+                if not board:
                     continue
                 attended_ids = set(str(x) for x in (board or {}).get("attendedIds", []))
                 expected_ids = set(str(x) for x in (board or {}).get("expectedIds", []))
@@ -501,21 +511,21 @@ def main():
                     if uid and not is_timely and (int(row.get("watch_time") or 0) > 0 or float(row.get("watch_process") or 0) > 0):
                         replayed_ids.add(uid)
                         teacher_total["replay_ids"].add(uid)
-                        replay_students[(teacher, class_id, uid, live_number)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, int(row.get("watch_time") or 0), float(row.get("watch_process") or 0) / 100, period]
+                        replay_students[(teacher, class_id, uid, live_number)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, int(row.get("watch_time") or 0), float(row.get("watch_process") or 0) / 100, block_period]
                 current_absent = absent_ids if board else set(str(row.get("user_id") or "") for row in live_items if not attended(row))
                 for uid in current_absent:
                     if not uid: continue
                     class_absent.add(uid)
                     teacher_total["live_absent_ids"].add(uid)
-                    untimely[(teacher, class_id, uid)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, period]
+                    untimely[(teacher, class_id, uid)] = [teacher, roster.get(uid, ""), uid, slot, class_id, class_name, live_number, block_period]
                     key = (teacher, class_id, uid)
-                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "reasons": set()})
+                    rec = abnormal.setdefault(key, {"teacher": teacher, "termShortId": term_short_id, "student": roster.get(uid, ""), "id": uid, "slot": slot, "period": block_period, "reasons": set()})
                     rec["reasons"].add("未参加直播")
                     rec.setdefault("missed_live_lessons", set()).add(int(live.get("course_id") or live_number))
                     if uid in replayed_ids:
                         rec.setdefault("replayed_live_lessons", set()).add(int(live.get("course_id") or live_number))
         if class_live_expected:
-            live_rows.append([teacher, slot, class_id, class_name, ",".join(map(str, opened_live_numbers)), class_live_expected, class_live_attend, class_live_expected - class_live_attend, len(class_absent), class_live_attend / class_live_expected, period])
+            live_rows.append([teacher, slot, class_id, class_name, ",".join(map(str, opened_live_numbers)), class_live_expected, class_live_attend, class_live_expected - class_live_attend, len(class_absent), class_live_attend / class_live_expected, block_period])
     abnormal_rows = []
     for rec in abnormal.values():
         if not rec["reasons"]:
@@ -524,7 +534,7 @@ def main():
             rec["reasons"].add("已回看" if rec["replayed_live_lessons"] == rec["missed_live_lessons"] else "部分已回看")
         category = abnormal_category(rec["reasons"])
         level = abnormal_level(rec["reasons"])
-        abnormal_rows.append([level, rec["teacher"], rec["termShortId"], rec["student"], rec["id"], rec["slot"], category, period])
+        abnormal_rows.append([level, rec["teacher"], rec["termShortId"], rec["student"], rec["id"], rec["slot"], category, rec.get("period", period)])
     priority = {"一级｜未完课（最高）": 1, "二级｜未准时参播": 2, "三级｜完课时长异常": 3}
     abnormal_rows.sort(key=lambda x: (priority.get(x[0], 9), x[2], x[1], ["周五晚", "周六午", "周六晚"].index(x[5]) if x[5] in ("周五晚", "周六午", "周六晚") else 9, x[3], x[4]))
     category_specs = [
@@ -575,7 +585,7 @@ def main():
         if len(peers) > 1 and arrived_rate > avg_arrived:
             warnings.append("到课未完课率高于同期均值")
         overview_rows.append([term, teacher, len(rec["classes"]), arrival_rate, live_rate, finish_rate, len(rec["incomplete_ids"]), len(rec["live_absent_ids"]), len(rec["replay_ids"]), len(rec["arrived_ids"]), "；".join(warnings) or "正常", period])
-    overview_rows.sort(key=lambda x: (x[0], -x[5], -x[4], x[1]))
+    overview_rows.sort(key=lambda x: (x[0], -x[5], -(x[4] if isinstance(x[4], (int, float)) else 0), x[1]))
     # The console snapshot chooses the latest available week independently for
     # each cohort.  Reuse that verified result for the overview and live-seat
     # sheets so completed cohorts do not disappear when newer cohorts continue.
@@ -598,7 +608,7 @@ def main():
                 current_metrics.get("incompleteStudents", 0), current_metrics.get("liveAbsentStudents", 0), current_metrics.get("replayStudents", 0), current_metrics.get("arrivedIncompleteStudents", 0),
                 "；".join(warnings) or "正常", row.get("currentWeek", "")
             ])
-        overview_rows.sort(key=lambda x: (x[0], -x[5], -x[4], x[1]))
+        overview_rows.sort(key=lambda x: (x[0], -x[5], -(x[4] if isinstance(x[4], (int, float)) else 0), x[1]))
         live_rows = []
         for row in snapshot.get("classes", []):
             current_metrics = row.get("current", {})

@@ -119,7 +119,9 @@ try {
     if (-not $nodeReady) { $nodeReady = Install-PortableNode }
     $chromeReady = Ensure-WingetPackage 'Google Chrome' @('chrome.exe','%ProgramFiles%\Google\Chrome\Application\chrome.exe','%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe','%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe') 'Google.Chrome'
 
-    $config = Join-Path $root 'dashboard-config.json'
+    $replicaRuntime = Join-Path $root 'instances\test'
+    if (-not $CheckOnly) { [void][IO.Directory]::CreateDirectory($replicaRuntime) }
+    $config = Join-Path $replicaRuntime 'dashboard-config.json'
     $configTemplate = Join-Path $root 'dashboard-config.portable.example.json'
     if (-not (Test-Path -LiteralPath $config) -and (Test-Path -LiteralPath $configTemplate)) {
         if (-not $CheckOnly) { Copy-Item -LiteralPath $configTemplate -Destination $config }
@@ -129,13 +131,13 @@ try {
     $launcher = Join-Path $root 'start-workbench.bat'
     $hiddenLauncher = Join-Path $root 'launch-dashboard-hidden.vbs'
     $desktop = [Environment]::GetFolderPath('Desktop')
-    $shortcut = Join-Path $desktop 'CodeMao Teaching Workbench.lnk'
+    $shortcut = Join-Path $desktop 'CodeMao Replica Workbench.lnk'
     if (-not $CheckOnly -and (Test-Path -LiteralPath $hiddenLauncher)) {
         $shell = New-Object -ComObject WScript.Shell
         $link = $shell.CreateShortcut($shortcut)
         $link.TargetPath = $hiddenLauncher
         $link.WorkingDirectory = $root
-        $link.Description = 'CodeMao teaching data workbench'
+        $link.Description = 'CodeMao replica workbench (8766)'
         $link.Save()
         Add-Report ('[OK] Desktop shortcut created: ' + $shortcut)
     }

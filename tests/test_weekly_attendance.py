@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from weekly_attendance_table import SHEET_NAME, build_weekly_attendance_table, verify_weekly_attendance_sheet, write_weekly_attendance_sheet
 from audit_weekly_rosters import latest_class_roster
+from audit_weekly_rosters import latest_class_roster
 
 
 def metrics(expected, attend, replay):
@@ -16,6 +17,10 @@ def metrics(expected, attend, replay):
 
 
 class WeeklyAttendanceTests(unittest.TestCase):
+    def test_missing_latest_course_detail_does_not_abort_roster_audit(self):
+        block = {"classId": 133374, "lessons": [{"course_id": 99, "unlock_time": 10}],
+                 "items": [{"course_id": 100, "user_id": "u1", "child_name": "学生"}]}
+        self.assertEqual(latest_class_roster(block), (0, {}))
     def test_configured_previous_and_current_weeks_are_kept(self):
         snapshot = self.snapshot()
         snapshot["updatedAt"] = "2026-10-25 20:00:00"
@@ -86,7 +91,7 @@ class WeeklyAttendanceTests(unittest.TestCase):
         snapshot = self.snapshot()
         snapshot["classes"][0]["current"]["missingLiveBoards"] = 1
         table = build_weekly_attendance_table(snapshot)
-        self.assertEqual(table["data"][0][13:], [1, None, None, None, None, None, None, None])
+        self.assertEqual(table["data"][0][13:], [1, None, None, *["待更新"] * 5])
         self.assertEqual(table["data"][0][13], table["data"][0][3])
 
     def test_workbook_verification_accepts_numeric_strings_but_rejects_bad_counts(self):

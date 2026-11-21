@@ -1,9 +1,15 @@
 ﻿param([Parameter(Mandatory=$true)][string]$InputFile)
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $env:HF_DASHBOARD_ROOT
-if ([string]::IsNullOrWhiteSpace($root)) { $root = $sourceRoot }
+if ([string]::IsNullOrWhiteSpace($root)) { $root = if (Test-Path (Join-Path $sourceRoot 'dashboard-config.json')) { $sourceRoot } else { Join-Path $sourceRoot 'instances/test' } }
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $sourceRoot $root $(if($env:HF_DASHBOARD_PORT){[int]$env:HF_DASHBOARD_PORT}else{8766}) 8766
+$env:HF_DASHBOARD_ROOT=$root
+$env:HF_DASHBOARD_PORT='8766'
 $statusFile = Join-Path $root 'scholarship-status.json'
 $lockFile = Join-Path $root 'scholarship-update.lock'
 $portableNode = Join-Path $sourceRoot 'runtime\node\node.exe'
@@ -36,6 +42,8 @@ try {
 
     Write-ScholarshipStatus 'running' '当前 Chrome 已读取完成，正在更新续费表格数据…' "筛选：$renewalMonth · 首续 · 深圳战区"
     Set-Location -LiteralPath $root
+    $errorReport = Join-Path $root 'renewal-error.json'
+    if (Test-Path -LiteralPath $errorReport) { Remove-Item -LiteralPath $errorReport -Force }
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $output = @(& $node $script $InputFile 2>&1 | ForEach-Object { [string]$_ })
@@ -47,6 +55,16 @@ try {
         if ([string]::IsNullOrWhiteSpace($text)) { throw "本地脚本退出码：$exitCode" }
         $errorLine = (($text -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Where-Object { $_ -notmatch '^CRM_OK rows=' } | Select-Object -Last 1)
         if ([string]::IsNullOrWhiteSpace($errorLine)) { throw "本地脚本退出码：$exitCode；未返回具体错误，请查看 scholarship-update.log。" }
+        # Read the writer's UTF-8 report, independent of native stderr decoding.
+        if (Test-Path -LiteralPath $errorReport) {
+            try {
+                $report = [IO.File]::ReadAllText($errorReport, [Text.Encoding]::UTF8) | ConvertFrom-Json
+                if (-not [string]::IsNullOrWhiteSpace([string]$report.message)) { $errorLine = [string]$report.message }
+            } catch {}
+        }
+        if ($errorLine -match '^CRM_MISSING_TARGET_COLUMNS:(.*)$') {
+            throw ("奖学金明细表头与CRM字段不一致，缺少对应字段：" + $Matches[1] + "。已在写入前停止，原表未修改；请提供副本目录中的renewal-error.json核对表头。")
+        }
         $errorLine = $errorLine -replace '^.*?node\.exe\s*:\s*',''
         if ($errorLine -match 'DINGTALK_ACCESS_DENIED') { throw '当前钉钉连接账号无权访问续费文档，请核对配置中的续费文档链接及该账号的文档权限。' }
         if ($errorLine -match 'DINGTALK_RENEWAL_DASHBOARD_NOT_FOUND') { throw '当前续费文档缺少续费看板子表，请确认续费文档链接或适配新文档结构。' }

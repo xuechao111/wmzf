@@ -6,6 +6,7 @@ $encoding=[Text.UTF8Encoding]::new($true)
 try{
     [void](New-Item -ItemType Directory -Path $fixtureRoot)
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'run-service-update.ps1') -Destination $fixtureRoot
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'instance-guard.ps1') -Destination $fixtureRoot
     [IO.File]::WriteAllText((Join-Path $fixtureRoot 'service-data.json'),'{"updatedAt":"fixture-version","sheetId":"fixture-sheet","teachers":[{}],"groups":[{}]}',$encoding)
     $env:HF_DASHBOARD_ROOT=$fixtureRoot
     $cases=@(

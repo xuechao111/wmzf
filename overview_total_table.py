@@ -93,6 +93,9 @@ def build_overview_total_table(snapshot: dict) -> dict:
             int(_num(current.get("arrivedIncompleteStudents"), 0) or 0),
             (snapshot.get("weeks") or {}).get("current") or "",
         ])
+        if current.get("livePending") or current.get("missingLiveBoards") or current.get("detailLiveFallbacks"):
+            for index in (5, 6, 15, 16, 17, 18, 20, 21):
+                rows[-1][index] = "待更新"
         row_meta.append({
             "liveGap": _rate_gap(item, "cohortLiveGap"),
             "finishGap": _rate_gap(item, "cohortFinishGap"),

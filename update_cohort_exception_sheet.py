@@ -74,7 +74,7 @@ def main() -> None:
         pairs = core.read_classes()
         (core.DATA / "classes.json").write_text(json.dumps(pairs, ensure_ascii=False), encoding="utf-8")
         run_command([
-            str(core.NODE), str(core.SOURCE_ROOT / "fetch_group_via_extension.mjs"), "9222",
+            str(core.NODE), str(core.SOURCE_ROOT / "fetch_group_via_extension.mjs"), "9223",
             str(core.DATA / "classes.json"), str(core.DATA / "group-lessons-raw.json"),
         ], core.SOURCE_ROOT)
     elif not (core.DATA / "group-lessons-raw.json").exists():

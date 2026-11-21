@@ -15,7 +15,11 @@ def latest_class_roster(block):
     lesson = max((lesson for lesson in block.get("lessons", []) if int(lesson.get("course_id") or 0) in by_course),
                  key=lambda lesson: (int(lesson.get("unlock_time") or 0), int(lesson.get("course_number") or 0)), default=None)
     if lesson is None:
-        raise ValueError(f"WEEKLY_ACTIVE_ROSTER_MISSING:{block.get('classId')}")
+        # A class can legitimately have detail rows while its latest course
+        # catalog entry is temporarily absent (CRM propagation/transfer). Do
+        # not abort the whole dashboard; the caller will use its verified
+        # class roster fallback and mark only weekly live data as pending.
+        return 0, {}
     return int(lesson["course_id"]), by_course[int(lesson["course_id"])]
 
 

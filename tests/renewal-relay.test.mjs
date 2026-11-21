@@ -32,7 +32,7 @@ async function harness(t,{direct='success',relay='success',port,wrongInstance=fa
       if(direct==='network-error')throw new TypeError('fetch failed');
       return {ok:direct==='success',status:403,json:async()=>success};
     }};
-  vm.createContext(context);vm.runInContext(source,context);
+  vm.createContext(context);vm.runInContext(source.replace(JSON.stringify(scriptPath),JSON.stringify(path.join(root,"sync-renewal-table.mjs"))),context);
   return {run:()=>context.mcpCall('get_range',{sheetId:'test'},100),root,urls,writes};
 }
 
@@ -44,10 +44,11 @@ test('network failure relays through default replica port and cleans queue files
   assert.equal(h.urls[1],'http://127.0.0.1:8766/health');assert.equal(h.writes.length,1);
   assert.deepEqual(fs.readdirSync(path.join(h.root,'run-data','mcp-relay')),[]);
 });
-test('explicit instance port is honored and runtime root must match',async t=>{
-  const h=await harness(t,{direct:'network-error',port:'8765',wrongInstance:true});
-  await assert.rejects(h.run(),/INSTANCE_MISMATCH/);assert.equal(h.urls[1],'http://127.0.0.1:8765/health');assert.equal(h.writes.length,0);
+test('wrong runtime identity stops before writing a relay request',async t=>{
+  const h=await harness(t,{direct:'network-error',wrongInstance:true});
+  await assert.rejects(h.run(),/INSTANCE_MISMATCH/);assert.equal(h.urls[1],'http://127.0.0.1:8766/health');assert.equal(h.writes.length,0);
 });
+test('main port is rejected before any remote call',async t=>{await assert.rejects(harness(t,{port:'8765'}),/INSTANCE_PORT_MISMATCH/);});
 test('relay transport failure never reports success or leaks remote error text',async t=>{
   const h=await harness(t,{direct:'network-error',relay:'failure'});await assert.rejects(h.run(),/DINGTALK_RELAY_FAILED:503/);
   assert.deepEqual(fs.readdirSync(path.join(h.root,'run-data','mcp-relay')),[]);
@@ -59,5 +60,5 @@ test('permission HTTP error does not replay a request via another channel',async
   const h=await harness(t,{direct:'http-error'});await assert.rejects(h.run(),/HTTP_403/);assert.equal(h.urls.length,1);assert.equal(h.writes.length,0);
 });
 test('invalid instance port stops before querying any local instance',async t=>{
-  const h=await harness(t,{direct:'network-error',port:'1234'});await assert.rejects(h.run(),/INSTANCE_PORT_INVALID/);assert.equal(h.urls.length,1);assert.equal(h.writes.length,0);
+  await assert.rejects(harness(t,{port:'1234'}),/INSTANCE_PORT_MISMATCH/);
 });

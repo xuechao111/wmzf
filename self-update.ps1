@@ -13,12 +13,55 @@ $zipUrl = 'https://github.com/xuechao111/wmzf/archive/refs/heads/main.zip'
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $InstallRoot $RuntimeRoot $Port 8766
 [void][IO.Directory]::CreateDirectory($RuntimeRoot)
 $statusFile = Join-Path $RuntimeRoot 'self-update-status.json'
 
 function Write-UpdateStatus([string]$state, [string]$message, [string]$detail = '') {
     $payload = [ordered]@{ state=$state; message=$message; detail=$detail; time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
     [IO.File]::WriteAllText($statusFile,($payload | ConvertTo-Json -Compress),$utf8NoBom)
+}
+
+function Assert-CohortTaskIdle([string]$File) {
+    $task = [IO.File]::ReadAllText($File) | ConvertFrom-Json
+    if ($task.state -ne 'running') { return }
+    # Recent browser-side preparation is active even before a worker exists.
+    if (((Get-Date) - (Get-Item -LiteralPath $File).LastWriteTime).TotalMinutes -lt 30) {
+        throw '课期异常任务仍在运行或准备中，请完成后再更新工作台。'
+    }
+    $lease=$null
+    try {
+        try { $lease=[IO.File]::Open((Join-Path $RuntimeRoot 'cohort-exception-update.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+        catch { throw '课期异常写入任务仍在运行，请完成后再更新工作台。' }
+        # Legacy versions have no lease/PID. Age alone never proves inactivity.
+        try { $workers=@(Get-CimInstance Win32_Process -ErrorAction Stop) }
+        catch { throw '无法核实旧课期异常任务是否已退出，已保护性停止。请重启电脑后重试；若仍失败请检查进程访问权限。' }
+        $sourceScript=Join-Path $InstallRoot 'update_cohort_exception_sheet.py'
+        $runnerScript=Join-Path $InstallRoot 'run-cohort-exception-from-extension.ps1'
+        foreach ($worker in $workers) {
+            if ([int]$worker.ProcessId -eq $PID) { continue }
+            $line=[string]$worker.CommandLine
+            if ($line.IndexOf($sourceScript,[StringComparison]::OrdinalIgnoreCase) -ge 0 -or $line.IndexOf($runnerScript,[StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw '检测到课期异常进程仍在运行，未替换程序。请完成后再更新工作台。'
+            }
+            if ([string]$worker.Name -match '^(python|pythonw|powershell|pwsh)(\.exe)?$' -and [string]::IsNullOrWhiteSpace($line)) {
+                throw '无法读取一个数据任务进程的信息，已保护性停止，未替换程序。'
+            }
+        }
+        $log=Join-Path $RuntimeRoot 'cohort-exception-update.log'
+        if ((Test-Path -LiteralPath $log) -and ((Get-Date)-(Get-Item -LiteralPath $log).LastWriteTime).TotalMinutes -lt 30) {
+            throw '课期异常日志近期仍有变化，请稍后再更新工作台。'
+        }
+        # Preserve evidence. This is an interrupted task, never a successful run.
+        $backup=$File + '.interrupted-' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff') + '.bak'
+        Copy-Item -LiteralPath $File -Destination $backup -ErrorAction Stop
+        $task.state='error'
+        $task | Add-Member -NotePropertyName message -NotePropertyValue '上次课期异常任务已中断，已解除残留运行状态。' -Force
+        $task | Add-Member -NotePropertyName detail -NotePropertyValue '已核对任务锁、进程及日志；原状态已备份，未修改表格数据。' -Force
+        $task | Add-Member -NotePropertyName time -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Force
+        [IO.File]::WriteAllText($File,($task|ConvertTo-Json -Depth 20 -Compress),$utf8NoBom)
+    } finally { if ($lease) { $lease.Dispose() } }
 }
 
 function Assert-ReleasePath([string]$RelativePath) {
@@ -60,6 +103,9 @@ function Get-ValidatedRelease([string]$Root) {
     $manifestPath = Resolve-ChildPath $Root 'release-manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Release manifest is missing; nothing was installed.' }
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    if ([string]$manifest.instance -ne 'replica' -or [int]$manifest.port -ne 8766) {
+        throw '更新包不是8766专用副本版本，已停止安装，配置和数据未替换。请使用副本专用修复包。'
+    }
     $entries = @($manifest.files)
     if ($entries.Count -lt 3) { throw 'Release manifest is incomplete.' }
     $seen = @{}
@@ -132,7 +178,25 @@ try {
         $file=Join-Path $RuntimeRoot $name
         if (Test-Path -LiteralPath $file) {
             $task=[IO.File]::ReadAllText($file) | ConvertFrom-Json
-            if ($task.state -eq 'running') { throw "A data update is running ($name). Please wait for it to finish." }
+            # Older replica connectors left browser-side CRM preparation in
+            # running state after the browser or service exited. Recover only
+            # this non-writing phase; active/recent writers still block install.
+            if ($name -eq 'status.json' -and $task.state -eq 'running' -and [string]$task.phase -eq 'crm' -and
+                ((Get-Date)-(Get-Item -LiteralPath $file).LastWriteTime).TotalMinutes -gt 32) {
+                $probe=$null
+                try {
+                    $probe=[IO.File]::Open((Join-Path $RuntimeRoot 'update.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+                    $log=Join-Path $RuntimeRoot 'update.log'
+                    if ((Test-Path -LiteralPath $log) -and ((Get-Date)-(Get-Item -LiteralPath $log).LastWriteTime).TotalMinutes -lt 32) { throw 'Update log is still active; wait before installing.' }
+                    Copy-Item -LiteralPath $file -Destination ($file+'.interrupted-'+(Get-Date -Format 'yyyyMMdd-HHmmss-ffff')+'.bak')
+                    $task.state='error'
+                    $task.message='Interrupted CRM preparation was cleared before installing replica repair.'
+                    $task.time=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    [IO.File]::WriteAllText($file,($task|ConvertTo-Json -Depth 20 -Compress),$utf8NoBom)
+                } finally { if ($probe) { $probe.Dispose() } }
+            }
+            if ($name -eq 'cohort-exception-status.json') { Assert-CohortTaskIdle $file }
+            elseif ($task.state -eq 'running') { throw "A data update is running ($name). Please wait for it to finish." }
         }
     }
     Write-UpdateStatus 'running' 'Checking the latest workbench release...' 'Configuration, credentials and runtime data are preserved.'

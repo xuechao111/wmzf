@@ -1,6 +1,6 @@
 {
-  "version": "2026.10.30-v8",
-  "connectorVersion": "1.6.64",
+  "version": "2026.11.21-replica-v24-cover-themes",
+  "connectorVersion": "1.6.80",
   "files": [
     {
       "path": "DESIGN.md",
@@ -16,15 +16,15 @@
     },
     {
       "path": "audit_weekly_rosters.py",
-      "sha256": "8365d62cbef3400a27c18ff0f9251132e11f985c526d0e505950b83428bd52ae"
+      "sha256": "e6e7081e9be4fff077302c6fe9284514c49b70447aa6f7ba539638160efd8648"
     },
     {
       "path": "bridge.ps1",
-      "sha256": "1e0dd91d539094ab2e213aa14a2bb499f3c5b684ea702e166bdd673894cfa3b0"
+      "sha256": "66871fee37e809eda3b8310a333f52c1bcca66124928355f432f0515de685326"
     },
     {
       "path": "broadcast_report.py",
-      "sha256": "444f4ce11fe84ffededee4fb1fc9aed1f62b2b1adedf38686c9563572b2ed00f"
+      "sha256": "2826c97d95e3308972532272f30784769bf1fd8b90b8ddaef27d7fc168481a89"
     },
     {
       "path": "broadcast_scope.py",
@@ -32,19 +32,19 @@
     },
     {
       "path": "build_exception_exports.py",
-      "sha256": "b2bf14c29d696070f3dc47f7a808f56df82755da08fc31db06e4d1a75da3631b"
+      "sha256": "23b8baa7283bad442341d6e86ac8d1245b325a245978586ab62ec45a169a5b4b"
     },
     {
       "path": "chrome-extension/background.js",
-      "sha256": "042f0c4d09810336f9f7424727a4b4d311fdd951dcf07e769582e6f9b342e563"
+      "sha256": "174a149b1f0a50359bda8e06f197d1015403debadfb376f781ebb2844611f909"
     },
     {
       "path": "chrome-extension/bridge.js",
-      "sha256": "0a0b347a92572bb17a6fb41505ba4829904ceab7048607ecf1510e231d89c98d"
+      "sha256": "a29e73d20af23b8046776c2ec145ab7bc6e9035dc67357324740f8780347abeb"
     },
     {
       "path": "chrome-extension/manifest.json",
-      "sha256": "ccd8d59977a51bcaa66248381f30f32d098d8aac3052d2b3f813ba45bbb16716"
+      "sha256": "8c5c505f32da4f50389cdb4f77208380ae7bc6d141aba98207be040acf2b3e68"
     },
     {
       "path": "comparison_live_cache.py",
@@ -52,7 +52,7 @@
     },
     {
       "path": "console_data_api.py",
-      "sha256": "343c8fe46d5af0b22a02f60f46dc319ba2d4132d8e9d9042f4de113ff358be12"
+      "sha256": "88fc50563c90a330031961a1c701a218c58ddfa49e761a1d034e1d40cc066bdf"
     },
     {
       "path": "dashboard-config.example.json",
@@ -64,11 +64,11 @@
     },
     {
       "path": "dashboard-config.test.example.json",
-      "sha256": "6782b8dbc188509920a061306dcb2179b04643dafed1f1eef29ed042b157d533"
+      "sha256": "afd6581767207904b7f2d137c4687acc9d66733aebc743241b92ffbec9c1ce1d"
     },
     {
       "path": "dingtalk_group_sender.py",
-      "sha256": "ccaee79fe2fa78988159bf7f2a6fc7d64b0531d8da26d394a47551c1bb6a3de8"
+      "sha256": "779796cf8941e1da7052e204cc0a2f6a7d044661893c41fdaf38be924bbc94dc"
     },
     {
       "path": "ensure-dashboard-service-hidden.vbs",
@@ -76,67 +76,79 @@
     },
     {
       "path": "ensure-dashboard-service.ps1",
-      "sha256": "9709aa4d88def84357ff7a3ff93e39ff5ab618a68cd932fb892da7c0de8f427a"
+      "sha256": "be1a84187e46b61b4f7d6ac87e2447c155be9298467a5f63217bddf2b7c83ec2"
     },
     {
       "path": "export_group_broadcast.py",
-      "sha256": "94d78b4b1af117faa617669c823088615abcc473206def5dbdf75be0293d323d"
+      "sha256": "38c4c58572d9064899c88f7d11c3ba00223a18d5ab1de5f2725db8e7b886c715"
     },
     {
       "path": "fetch_group_via_extension.mjs",
-      "sha256": "33d84bb10268c6caf897129e5cc1ad19a2aeb2f2da97a3521a90bcfd9688a9e8"
+      "sha256": "20d2b6ff334edbff1677e88ed254a30d1c0a0904b8930b8f79903fc5e30f13c0"
     },
     {
       "path": "get_dashboard_snapshot.py",
-      "sha256": "e5f4447de1be53403a29dca1c685465899c70c141bbb854433de1ba1ca788cae"
+      "sha256": "07ed33cf412e29689a9c8c9832dc4facae867ae274d72838e3b0cca1553d2bf2"
     },
     {
       "path": "index.html",
-      "sha256": "f9f87380b357535afd9308683329e7aa4c471fb6f93c445f1757c4720c329716"
+      "sha256": "6be020f6611ed790d02d92a41756747bc83113711f7d4e01969d2b8881b85acd"
     },
     {
       "path": "launch-dashboard-hidden.vbs",
-      "sha256": "c08f28993177c3aa3c00a7bdbd7d241e0ea7560d034bfeabd697466428c1d6b5"
+      "sha256": "7a410546a1b05c4a4cb25e70f306dd5e51e0c4b46b501febc1500fcfb603725c"
+    },
+    {
+      "path": "live_pending.py",
+      "sha256": "1d1f582ad494de0cfaf6f99f8e0ee20bc42391f5965924887d528c8aa5933793"
     },
     {
       "path": "overview_total_table.py",
-      "sha256": "65c8ff6a40d981f24d0b81220bff1e29ad93dc9f79853d8ecc64b431dea93abc"
+      "sha256": "b30acd5cc31afc7632dedd088330cb4ecc5417fd53d9f880209ebf067ec73e0e"
     },
     {
       "path": "prepare_extension_update.py",
       "sha256": "401868fdbdc15d6b8ac82d94e619d8b65c955e1f80ae9945e63783049c73a338"
     },
     {
+      "path": "repair-replica-update.ps1",
+      "sha256": "4c715e795a97b2b672e20040569aa430fea79fed8ac6d47ccc39ef62c4e7577c"
+    },
+    {
+      "path": "replica-diagnostics.ps1",
+      "sha256": "b340fdadcd66f513a993a4b3fbdffe504b87027327e7e650bd43e0aa69518b73"
+    },
+    {
       "path": "restart-dashboard.ps1",
-      "sha256": "2ac044795eafd0342da744a1aba00342b4e7740145255765ae98be5ae4d8e9e2"
+      "sha256": "8304fd19d4749bf7b0733e5ad42f99b986b765b0f7d798d72d1fd01f4034bec8"
     },
     {
       "path": "run-cohort-exception-from-extension.ps1",
-      "sha256": "8224a54ae3f42412cd9b214b3bd3d04e5c8bbeed642bf2f1be99fae3534767c6"
+      "sha256": "03a2c69db4e54089d395eaa8eea0c138bcbd6aae1ed4c85af951ec2b06ae0e2e"
     },
     {
       "path": "run-direct-from-extension.ps1",
-      "sha256": "84e4ae7d9954ba84516a877e735a0141e8e288d1d4547a39ff882bed4d604bfc"
+      "sha256": "f3c894d40bada2a1576eaca0c5b1282f74ea40e530d5cad1d91c81c837724055"
     },
     {
       "path": "run-direct.ps1",
-      "sha256": "f2ee375ed337b23dfc88dd96024da5b8497d6a4d01563d402b1259a06e8135e8"
+      "sha256": "a43391da7cd808b9e701c2442e74e7b1760376eb01a141a086ec6fdf27e2b7dc"
     },
     {
       "path": "run-nct-update.ps1",
-      "sha256": "c9620a14212b3d00ac298e30d014eb8590a38acdaded77b902927c3e4ebce080"
+      "sha256": "eeabe30fc24de8dc6441afd9799c7a7ef895958488d163515fc40a2e2c0e2b86"
     },
     {
       "path": "run-scholarship-update.ps1",
-      "sha256": "b197da66b802bdc10b199cfc7d1ff927990b87678866994ead0663642a686f4b"
+      "sha256": "b529a0993b8b5a067d588a4baaec94b3385ef243392e13af43add652ea7c82a6"
     },
     {
       "path": "run-service-update.ps1",
-      "sha256": "c51214ba4b3561f167844b5984e11e6f0f671a7b4f8a47be29b946c0fc599775"
+      "sha256": "ce45c321c75cf4528761731afcf3bcfcc81e098e2d14aae3a5b03e4e52083f23"
     },
     {
       "path": "run_dashboard_update.py",
-      "sha256": "0ba7943fe7717dc7763d2b78ab9e673323b7bb9f1a3e1aaa09dfef11dcb320bc"
+      "sha256": "6f787c046139398a18e70eb1a340de4ab029d36565ccfbf1aa97797021c6188d"
     },
     {
       "path": "scripts/build_group_dashboard.mjs",
@@ -144,19 +156,19 @@
     },
     {
       "path": "scripts/fetch_group_lessons.mjs",
-      "sha256": "bf2aea196e7f97a99638c83ab78a6c949f0e9130a97fc8c694edb7216056c45d"
+      "sha256": "68cdf3419f673494b5baa727b964876fb72c556ee2877b69133643467d466d98"
     },
     {
       "path": "self-update.ps1",
-      "sha256": "f49a80978dd27a9d1363644b227c4fbadbd87a16c1aa10150a16cba12376d01f"
+      "sha256": "fe8cd8c1b05dc2976932869a996c98e041eba3b6dc6d7732f8ba6d6f3c7077f7"
     },
     {
       "path": "setup-workbench.ps1",
-      "sha256": "0c8556c7869c160b5311f78bf2b1863a8c9e62d109bdc16d9f282636184c1a20"
+      "sha256": "595913b90b8b70a42aa6cb15cfecab27635ef58664782cfba91e7acb2bcb0c1e"
     },
     {
       "path": "start-test-workbench.ps1",
-      "sha256": "00d761e877536b45ed6e4348770e0d631b0af19fb986a7209ff52611f7ec2195"
+      "sha256": "a70d75a5f5ffbdc7a4e9b3d431aea473239034b96278653ef6979bcfe5d2db9d"
     },
     {
       "path": "start-workbench.bat",
@@ -164,47 +176,55 @@
     },
     {
       "path": "start-workbench.ps1",
-      "sha256": "37b0dfe34d21ca3c5911951e57b357e61ac5a78c21b3035bf44b64a05884554d"
+      "sha256": "5cb3a7267202bc3f2721eea4bb03bf94f10694afc0b40c6489fa125ecf04eee6"
     },
     {
       "path": "sync-nct-table.mjs",
-      "sha256": "b7d4ecac2a19ed3951001f21804f82550ec483df3834c446800d9bac90dcb946"
+      "sha256": "94ced982d1bd9c03f6cfa86801ee0575dcf90e8266b3e890edc0a17aed7767a6"
     },
     {
       "path": "sync-renewal-table.mjs",
-      "sha256": "2fb8b4be010555e5dae5344e02ad298647846c2d4b2134c0c0508041cb1e4efa"
+      "sha256": "84aa55dd56e8d4fb5fac765b4e64a190483b2f6b2459ae49376b37b9c3b5aa6f"
     },
     {
       "path": "sync-service-data.mjs",
-      "sha256": "2c11ebde27d06a29c0b10f8b97cfaadb1ab894c447a052145f3ea98bb4421b05"
+      "sha256": "3acb71a10def163771dac12131cea98cec7b5e335c867cdb0088b002495c604a"
     },
     {
       "path": "tests/broadcast-result.test.ps1",
-      "sha256": "f5998682b147035286b14290447c24c68d405d382eadf9408590dcce8e6939d0"
+      "sha256": "3dd300666a07cc725bf4112a3da2248b0ccc26adc7ad133236b46d7276fa7d2a"
     },
     {
       "path": "tests/class-preparation.test.mjs",
-      "sha256": "2a0b424405fc1cd61ac08df84543683f67891db735c18c98481a530c7dc8bea9"
+      "sha256": "b40091dadd9dda2221b7fb447c659935e69b3734d9da1f450b25c870a376bacc"
     },
     {
       "path": "tests/class-preparation.test.ps1",
-      "sha256": "87eec9572142a0a268591deaa9f5f0fa646d1c4ec6a7c615f906906a5e563c70"
+      "sha256": "036cc09a69a53784953c6d27ef612ff8b53d91df54d3b138e4b99e82c7ef9fa1"
     },
     {
       "path": "tests/comparison-live.test.mjs",
-      "sha256": "9d1a36081d39f94d435aa5681546067225b36b18e1d56ee689344735d2bd4383"
+      "sha256": "fb251b170e5fab83e9bb024edaa73187229d83c7b2f1e107303e47dad154d999"
     },
     {
       "path": "tests/fixtures/overview_styles_before_batching.py",
-      "sha256": "ed77509f00bad4104a5dbc6a4352286d01eaa86b80e70c4d1a9114601aaee42d"
+      "sha256": "d3211b74f5cbbdd86660d859a2b9120e82d282cc51bde084e9b0b22614270be9"
     },
     {
       "path": "tests/live-board-match.test.mjs",
-      "sha256": "7c849a48506eda63fae1c0c9b98fee5b8bd13b2171d6935974a44d7d4a74a321"
+      "sha256": "3b2e39983bfa97e3f7a05dfc6b297575a930a83afe0b2fe3c8848bc6f64f6517"
+    },
+    {
+      "path": "tests/live-pending-ui.test.mjs",
+      "sha256": "4ddeb653b831cfdd8a4e09aa09375522f7b5e59877c7871a85ef52d1accd3df7"
+    },
+    {
+      "path": "tests/live-pending.test.mjs",
+      "sha256": "3374a93f80a52f80fb7f161b87352309295055791fa37088e59da18bddf8442b"
     },
     {
       "path": "tests/live-slot-source.test.mjs",
-      "sha256": "377d3518564aa5b00de1c2abfba5b965a6cb1b024626d743f377d5b59cfad3c5"
+      "sha256": "f1bedf15ccf36ca569a5719f6762a82924f27e4a3175c497d32a15a124b3ff7e"
     },
     {
       "path": "tests/nct-workflow.test.mjs",
@@ -216,19 +236,35 @@
     },
     {
       "path": "tests/renewal-relay.test.mjs",
-      "sha256": "d8017a39fcf0a3281506f287ef7bdab0c1efafb08be1fc88cb60f79bb31fa8c6"
+      "sha256": "aca304dea15cdbb9d2ec894312ded1ebdf85744d7f20b6db6901ac4561ec3e63"
+    },
+    {
+      "path": "tests/repair-replica-update.test.ps1",
+      "sha256": "22513fa0147812ae1fb4497dfbd2b3e036d53bb440b779d1caedbe71050ae464"
+    },
+    {
+      "path": "tests/replica-manual-isolation.test.ps1",
+      "sha256": "3a35ab03ab9bdfa0c2e7e369cfa5975796a9d26b9678b29af914ad7c86feb55a"
+    },
+    {
+      "path": "tests/replica-manual-worker.test.mjs",
+      "sha256": "92b8c4c4bd6598f544b1c1a66fdf99b78dc87cdc9cf71a5e935b9183bb327764"
+    },
+    {
+      "path": "tests/self-update-stale.test.ps1",
+      "sha256": "936be93b2efc88a1624aad881452befd5a0b26dae34a0b5ebf786bcdf5d98c2d"
     },
     {
       "path": "tests/self-update.test.ps1",
-      "sha256": "c8e85983c3dae2dc9221847baeb4b17df00f5a5a714d183440dd0e96285931d6"
+      "sha256": "c73fc00156f9634cd37bac7fa821f1d98fd82b36358c311a1d8549c5b2364f06"
     },
     {
       "path": "tests/service-daily.test.mjs",
-      "sha256": "ca0c2f4d13113826ecb49b05679749195733306cba668dcb426f28b5a450e73b"
+      "sha256": "86e6cb953bea4fda8ca214cbe17de81228e60de7a8c193f4e5fcc29e50d45475"
     },
     {
       "path": "tests/service-metrics.test.mjs",
-      "sha256": "bd67f8fae5128bdf3d35f3d1ec64ffa464a8da7e6cb8635894f9817cc51884bd"
+      "sha256": "195dd065b6d03faa227604faafe4bc19c1b2db5706a02c843d72e1c161127beb"
     },
     {
       "path": "tests/service-relay.test.mjs",
@@ -236,19 +272,19 @@
     },
     {
       "path": "tests/service-runner.test.ps1",
-      "sha256": "7e289d90cadbcebe9e0f385a55db794233f38972b3b5ed0229e66378b2427ee0"
+      "sha256": "f75d943f7d1ee63a30e324b0074e2a2d17ce39bbdd67c427f3af1485287a0ae6"
     },
     {
       "path": "tests/term-catalog-cache.test.mjs",
-      "sha256": "16feb0c7674d416b1b72d46b88c31d1dbd53342b7e82914f2ffc93661769529a"
+      "sha256": "ae5d866485c74c957652ddb572b1eaa3c996079f77f8f35514d9a656dd979493"
     },
     {
       "path": "tests/test_abnormal_priority.py",
-      "sha256": "5a6a9055e9de39455a55cec5b1c602ccc8182b4d8bec09b6c09e9a60a88f47c9"
+      "sha256": "5fe350d5db5f9210b3297f187eb0186257d960078658387f17f33d0dffeed4d9"
     },
     {
       "path": "tests/test_class_source.py",
-      "sha256": "5418fcf5a81c0a97aba788735849d1b020f5ef8630d6fe0570ebd3044130a24f"
+      "sha256": "577f67557a5519f89d50c049b7e24921c7ec83435959fc44a777f9c5bb37f0b4"
     },
     {
       "path": "tests/test_comparison_live_cache.py",
@@ -256,31 +292,43 @@
     },
     {
       "path": "tests/test_course_package.py",
-      "sha256": "5c2eb18740e66273796fc93f76f4b7ff6949f178915f134d86638a9fbc6a62e8"
+      "sha256": "84d0276c8ae2b127685922539d12c0ea3e663a6869a692b3718f3b0d23da9d6e"
+    },
+    {
+      "path": "tests/test_live_pending.py",
+      "sha256": "ce9aa581cc32601f5f6284996a639f7de2e55705bf86d49cac0fd79903dfbb3d"
+    },
+    {
+      "path": "tests/test_mcp_operation_errors.py",
+      "sha256": "9207d857a09adbffbf1c67c88702d45c3c60d6744ab3ac41e7e1f99d70816dab"
     },
     {
       "path": "tests/test_overview_batching.py",
-      "sha256": "36ea8fba620a80e2b3cc88cf82fa3832e789876b49c6a7a565cc5ca51282f650"
+      "sha256": "afd7c0a4e583b5d906c8969713808fe309cb253c86908e9bfb4cc437dbfd8d7f"
+    },
+    {
+      "path": "tests/test_replica_clear_bounds.py",
+      "sha256": "61320c84bcf22cf096ac3e392daa9023ba00fa4c30ba764179e16376074ce976"
     },
     {
       "path": "tests/test_style_batching.py",
-      "sha256": "d00a4a3a5bbcb71fbed0ecab93f4fd45883f26bbb9cec01c835455e63fc17a92"
+      "sha256": "205d1d60997310584019f0a640549a07a233241ba0639a8e92d395275afd8fc1"
     },
     {
       "path": "tests/test_weekly_attendance.py",
-      "sha256": "4e2c6a4a739e595f1426c5044f70f36125f38c953fe912f35c875626dbad1e88"
+      "sha256": "3eea08a2010497d5ac561a0228d6703cb48d656e778c5004334c84b7c6780dea"
     },
     {
       "path": "tests/update-lifecycle.test.mjs",
-      "sha256": "72e56ceb5090421a7beb61a6f8582997bd497c726c9544cbe903fc8e664561ae"
+      "sha256": "97c1cb57e5a8b6985a3a1a1d2f07e869e74fa3864fc8a86119fd4624f97d1a3b"
     },
     {
       "path": "update-workbench.ps1",
-      "sha256": "c61d66780046d7153ff436c58f3d6bc9223f8be990c2b28d8bb7f682b9850db3"
+      "sha256": "eb3bb32defc3bc4007f79895db08fe265f5120b29597f0b4ca4649196ed93098"
     },
     {
       "path": "update_cohort_exception_sheet.py",
-      "sha256": "3bfdf819e000dfbce608d523dc76e91a4acbddea2f43f8ccfac37f2d16b93efb"
+      "sha256": "767b47260de117722d7cfba188bb9e590df21154a8e101875fd75bd0927663d9"
     },
     {
       "path": "view.html",
@@ -288,23 +336,27 @@
     },
     {
       "path": "weekly_attendance_table.py",
-      "sha256": "995a52d1bb690c80b6655892da52fa44aca39a3147f5605b0eeb284ca6aaa7cb"
+      "sha256": "073fa88dd4179448625d5ce2f5cfa737819fc9f0f93c422132ed78ae0d69a5f8"
     },
     {
       "path": "write_exception_exports.py",
-      "sha256": "68feb5ea8771769222647c46b3718c99208756f985c04e4d199308d1861c333f"
+      "sha256": "e66efd2a12a003ff336ed1f61762487d9a8088e4dcc5b1442863a8a81df69d45"
     },
     {
       "path": "一键更新工作台.bat",
-      "sha256": "ecfc6e7aa66dba742d256a32df5c5a52edc2e0f408ec9e2963c58db502d94be8"
+      "sha256": "0207c15025dedc5d3311e0ea600768d4c6430af6a9e11f1ee921532dca43e6dd"
     },
     {
       "path": "使用说明.txt",
-      "sha256": "28e05ebd3a5a9aeb31df07993eae59565a70fe5b85e74bee9c4e04bf77d15086"
+      "sha256": "366674bb5e67264f7d743cd785ffe13b52c079eda616fa011da77c97b2cba05c"
+    },
+    {
+      "path": "修复副本更新失败.bat",
+      "sha256": "5448626bce6b7b784c993f3b4f731928cc26e9a5f4560411da03e8973a85961c"
     },
     {
       "path": "启动 HyperFrames 控制台.bat",
-      "sha256": "2b71aeea5e8584f9fa5a5afabcef0d995a28f9db789eb1e6cd7182686db38bc7"
+      "sha256": "3a0790db007bce8c67a723e56fa12b0f432fcf4caf47074ea6f6783847903c40"
     },
     {
       "path": "启动测试工作台.bat",
@@ -317,6 +369,116 @@
     {
       "path": "首次安装一键配置.bat",
       "sha256": "c894516790cadebf65a26d41a4af2c43f842df0c64744d9abc6a007e1322a1da"
+    },
+    {
+      "path": "tests/crm-page-size.test.mjs",
+      "sha256": "e27c7af17fdd16789dfbcad85bf0fc8ebab4f650ad4c5ea1a46d7a0bad3a3906"
+    },
+    {
+      "path": "副本检查修复记录.md",
+      "sha256": "562ae7f9e13e1b996031534182c89b86d8a1898c1d87ddb49c83f711616df576"
+    },
+    {
+      "path": "tests/crm-auth.test.mjs",
+      "sha256": "0e134667f4defa0939bb100bd1c1fbfccf13226d87b5d77916115f9e5f27bf1e"
+    },
+    {
+      "path": "tests/crm-request-budget.test.mjs",
+      "sha256": "14b55281cbf6e9cbf58214c6b4b3f63f981e47a2b6b62e7547be4641ed830096"
+    },
+    {
+      "path": "tests/renewal-all-groups.test.mjs",
+      "sha256": "a1bf70ce637628ef568a8cead8a69f484713d9eafaa6856e8d5e6585554a8204"
+    },
+    {
+      "path": "tests/renewal-scope-guard.test.ps1",
+      "sha256": "079d6f21839252fe6a244bf64875fc6ddb7e2020e9bc7d163001ecdad41ad36b"
+    },
+    {
+      "path": "tests/replica-client-start.test.mjs",
+      "sha256": "f3942167588de87b25ebafacb4ecb09838fc82125293b756b65bf4a8f4902761"
+    },
+    {
+      "path": "tests/replica-connector-isolation.test.mjs",
+      "sha256": "d470963549fe38a88e017e4e1e1656b9e16d24ec591886a08dfaa709af0977ee"
+    },
+    {
+      "path": "一键修复副本.bat",
+      "sha256": "c663cf2c5dba8467912aba929bb7b2a8455aea2c02ae517c7eb57270d485573a"
+    },
+    {
+      "path": "replica-connection-guide.html",
+      "sha256": "306197c19bafc5ac16b6051a2dcbfd7683729805b1c2401e8feff50620ab6864"
+    },
+    {
+      "path": "tests/replica-launcher.test.ps1",
+      "sha256": "ca17229591071953ba20cf9721693466debf0bd86ff8c734e793fc9fa30bf526"
+    },
+    {
+      "path": "tests/test_exception_cohort_alignment.py",
+      "sha256": "ac437c6bb82ec67c9ab5169fe629cdd23c708ad053c31d3637d2a3eb8047999c"
+    },
+    {
+      "path": "完整版安装说明.md",
+      "sha256": "d8d8414c2a8a5156b4dcd71fd4290b8ebaab101e91d5905099b079298dc36ca0"
+    },
+    {
+      "path": "instance-guard.ps1",
+      "sha256": "b57d0ed7d8fecb92107554258addd9ce5011b73ca7aca15bc41b9a00c08f9797"
+    },
+    {
+      "path": "runtime_paths.py",
+      "sha256": "5014e74cacbd4b4620bed511db6a3bfd906b8501e0955b0884cce816eaa90dda"
+    },
+    {
+      "path": "tests/instance-boundary.test.mjs",
+      "sha256": "69ca9147621a1b520a9e4fb72a389e1db195dd31fc6de98cc731ac995b379f57"
+    },
+    {
+      "path": "tests/instance-isolation.test.ps1",
+      "sha256": "d6a07656630e3091ef3846c3196a1e3582f255fbef4b4cbfb57fb24349f63fad"
+    },
+    {
+      "path": "tests/test_instance_boundary.py",
+      "sha256": "ff226f09507d9ba56e7d0c73da43d25ce06865789efb57c9fc9a506609d90b47"
+    },
+    {
+      "path": "tests/renewal-empty-results.test.mjs",
+      "sha256": "b4af75b3a8b42da6d73a5facb6fd7a98a0cfeb259068128adf0e00e3d3e75a0a"
+    },
+    {
+      "path": "tests/renewal-schema-growth.test.mjs",
+      "sha256": "096ad229e1027b16dba189019989536a382aa3d25f77cc92cd359ea410b24aa3"
+    },
+    {
+      "path": "tests/renewal-error-encoding.test.mjs",
+      "sha256": "e48f9b2221bacd0c7b8e8f28aa370b54a576a6c6795499f10695d006a15a615e"
+    },
+    {
+      "path": "tests/service-group-scope.test.mjs",
+      "sha256": "416a83b1341b994dc700ded386671c6c2045488bb409de99ce7cd8cf1b195f9f"
+    },
+    {
+      "path": "tests/test_rolling_period_verification.py",
+      "sha256": "9c3ca300059573f7296f1fa8ac2e6ec32682d5a1504fcabd5a1eaecafc6059bb"
+    },
+    {
+      "path": "tests/config-save.test.ps1",
+      "sha256": "ffb4423ff407f9fec7151e6da7221dc869a8bb11bfd7a0c4b6f88a1fd436a176"
+    },
+    {
+      "path": "tests/config-save-readback.test.mjs",
+      "sha256": "78de20cd0e80bd45b3e61cd94bf76b1c59ff4c3f49f7c90e0b8666f0eb917014"
+    },
+    {
+      "path": "tests/cover-themes.test.mjs",
+      "sha256": "62a6ae71fec8bbf54c631e68c42d46f96c443c5a5e817e746d7ad155f8ac56a5"
+    },
+    {
+      "path": "tests/fixtures/main-cover.html",
+      "sha256": "678c1fba9db6a7332db6ea583b5e2e7b64fb794ea6558ea56e6e1bed87bfef45"
     }
-  ]
+  ],
+  "instance": "replica",
+  "port": 8766
 }

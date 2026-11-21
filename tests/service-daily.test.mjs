@@ -47,11 +47,14 @@ async function query({failWecom=false,wrongDate=false,missingDate=false,callRows
     return {ok:true,status:200,json:async()=>payload};
   };
   const func=vm.runInNewContext(`(${callback})`,{fetch,AbortController,setTimeout,clearTimeout});
-  return {data:JSON.parse(await func(multi,today,{hours:['14','15'],startHour:14,endHour:21})),requests,definitionRequests};
+  return {data:JSON.parse(await func(multi,today,{groupName:'致远组',hours:['14','15'],startHour:14,endHour:21})),requests,definitionRequests};
 }
 
 test('daily IM and WeCom use today, overriding historical chart ranges',async()=>{
   const {data,requests}=await query();
+  assert.equal(data.groupName,'致远组');
+  for(const request of requests) for(const item of request.queries)
+    assert.deepEqual(item.filters.find(filter=>filter.col==='level_7_department_name').val,['致远组']);
   assert.equal(data.today.status,'ok');
   const daily=buildServiceViews(data.today),aggregate=buildServiceViews(data);
   assert.equal(daily.teachers[0].im,80);

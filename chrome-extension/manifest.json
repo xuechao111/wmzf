@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "编程猫教学控制台连接器",
-  "version": "1.6.64",
-  "description": "让本地教学控制台使用当前Chrome中已登录的编程猫CRM页面。",
+  "name": "编程猫副本工作台连接器",
+  "version": "1.6.80",
+  "description": "副本8766专用；手动更新；不访问主工作台8765。",
   "permissions": [
     "tabs",
     "scripting",
@@ -10,8 +10,6 @@
     "storage"
   ],
   "host_permissions": [
-    "http://127.0.0.1:8765/*",
-    "http://localhost:8765/*",
     "http://127.0.0.1:8766/*",
     "http://localhost:8766/*",
     "https://codecamp-crm.codemao.cn/*",
@@ -28,8 +26,6 @@
   "content_scripts": [
     {
       "matches": [
-        "http://127.0.0.1:8765/*",
-        "http://localhost:8765/*",
         "http://127.0.0.1:8766/*",
         "http://localhost:8766/*"
       ],

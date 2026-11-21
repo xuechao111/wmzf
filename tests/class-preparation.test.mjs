@@ -9,7 +9,7 @@ const code=source.slice(start,source.indexOf('\nasync function postLocalStatus',
 
 async function prepare(responses){
   const calls=[];
-  const context={LOCAL_BASE:'http://127.0.0.1:8765',normalizeLocalBase:value=>value,
+  const context={LOCAL_BASE:'http://127.0.0.1:8765',normalizeLocalBase:value=>value,replicaStatusOwners:new Map(),
     fetchWithTimeout:async(url)=>{calls.push(url);return responses.shift();},
     setTimeout:callback=>callback()};
   vm.runInNewContext(code,context);

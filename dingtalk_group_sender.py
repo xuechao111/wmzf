@@ -5,7 +5,8 @@ import urllib.request
 from pathlib import Path
 import os
 
-CONFIG = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent / "instances" / "test") / "group-broadcast.local.json"
+from runtime_paths import runtime_root
+CONFIG = runtime_root() / "group-broadcast.local.json"
 
 
 def send_text(text):

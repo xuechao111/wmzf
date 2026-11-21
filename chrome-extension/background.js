@@ -1,10 +1,12 @@
-let LOCAL_BASE="http://127.0.0.1:8765";
+let LOCAL_BASE="http://127.0.0.1:8766";
 const CRM_RUNTIME_TIMEOUT_MS=6*60*1000;
 const LOCAL_RUNTIME_TIMEOUT_MS=11*60*1000;
 const activeUpdateRuns=new Set();
+const replicaStatusOwners=new Map();
 
 function normalizeLocalBase(value){
-  return /^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(value||""))?String(value):"http://127.0.0.1:8765";
+  if(!/^http:\/\/(127\.0\.0\.1|localhost):8766$/.test(String(value||"")))throw new Error("副连接器仅支持8766");
+  return "http://127.0.0.1:8766";
 }
 function instanceStorageKey(name,localBase=LOCAL_BASE){
   return `${name}${normalizeLocalBase(localBase).endsWith(":8766")?"Test":""}`;
@@ -16,7 +18,7 @@ function instanceAlarmPrefix(localBase=LOCAL_BASE){
 async function injectDashboardBridge(){
   try{
     const tabs=await chrome.tabs.query({url:["http://127.0.0.1/*","http://localhost/*"]});
-    await Promise.all(tabs.map(tab=>chrome.scripting.executeScript({target:{tabId:tab.id},files:["bridge.js"]}).catch(()=>null)));
+    await Promise.all(tabs.filter(tab=>/^http:\/\/(127\.0\.0\.1|localhost):8766(?:\/|$)/.test(tab.url||"" )).map(tab=>chrome.scripting.executeScript({target:{tabId:tab.id},files:["bridge.js"]}).catch(()=>null)));
   }catch{}
 }
 
@@ -38,7 +40,8 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
       // browser had already closed, which was incorrectly surfaced as an
       // update failure.  Keep this below the outer two-minute deadline while
       // allowing one preparation attempt to finish normally.
-      const response=await fetchWithTimeout(`${localBase}/${endpoint}`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey})},60000);
+      const response=await fetchWithTimeout(`${localBase}/${endpoint}`,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotKey,statusOwner:replicaStatusOwners.get(localBase)||""})},60000);
+      if(response.status===403)throw new Error(`REPLICA_MANUAL_ONLY:${(await response.json()).message||"副本只允许手动更新，请更新连接器"}`);
       if(response.status===409)throw new Error("已有更新正在运行");
       if(response.status===429){let detail="同一自动更新时段正在冷却";try{detail=(await response.json()).message||detail}catch{}throw new Error(`SCHEDULE_COOLDOWN:${detail}`);}
       if(response.ok||response.status===503){const payload=await response.json();if(!payload.preparing&&response.ok)return payload;lastError="正在读取钉钉最新班级明细";}
@@ -49,6 +52,7 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
       if(message==="已有更新正在运行")throw error;
       if(message.startsWith("SCHEDULE_COOLDOWN:"))throw error;
       if(message.startsWith("CLASS_SOURCE_FAILED:"))throw error;
+      if(message.startsWith("REPLICA_MANUAL_ONLY:"))throw error;
       lastError=message;
     }
     await new Promise(resolve=>setTimeout(resolve,5000));
@@ -57,7 +61,7 @@ async function waitForLocalPreparation(slotKey="manual",timeout=2*60*1000,localB
 }
 
 async function postLocalStatus(state,message,detail="",phase="crm",localBase=LOCAL_BASE){
-  const body=JSON.stringify({state,message,detail,phase}).replace(/[\u0080-\uFFFF]/g,char=>`\\u${char.charCodeAt(0).toString(16).padStart(4,"0")}`);
+  const body=JSON.stringify({state,message,detail,phase,statusOwner:replicaStatusOwners.get(normalizeLocalBase(localBase))||""}).replace(/[\u0080-\uFFFF]/g,char=>`\\u${char.charCodeAt(0).toString(16).padStart(4,"0")}`);
   try{await fetchWithTimeout(`${normalizeLocalBase(localBase)}/extension-status`,{method:"POST",headers:{"Content-Type":"application/json"},body},5000);}catch{}
 }
 
@@ -212,8 +216,11 @@ function resolveLiveBoardMatch(board,blocks){
     return number?courseNumber===number:titles.some(title=>courseTitle(title)===courseTitle(lesson.course_name));
   });
   if(exact.length){
-    if(number)return {lessonNumber:number,targets:exact,method:'class-id'};
-    const matches=exact.flatMap(block=>lessonMatches(block).map(lesson=>({block,lesson})));
+    // A substitute's room must not be attributed to the assigned teacher.
+    const assigned=exact.filter(block=>!boardTeacher||teacher(block.info?.teacherName)===boardTeacher);
+    if(!assigned.length)return null;
+    if(number)return {lessonNumber:number,targets:assigned,method:'class-id'};
+    const matches=assigned.flatMap(block=>lessonMatches(block).map(lesson=>({block,lesson})));
     const numbers=[...new Set(matches.map(({lesson})=>Number(lesson.course_number)))];
     if(numbers.length===1)return {lessonNumber:numbers[0],targets:[...new Set(matches.map(({block})=>block))],method:'class-id-course-title'};
     return null;
@@ -238,7 +245,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
           for(let attempt=1;attempt<=maxAttempts;attempt++){
             if(Date.now()>=deadline)throw new Error("CRM_TOTAL_TIMEOUT");
             const controller=new AbortController();
-            const timer=setTimeout(()=>controller.abort(),requestTimeout);
+            const timer=setTimeout(()=>controller.abort(),Math.min(requestTimeout,deadline-Date.now()));
             try{
               const r=await fetch(url,{credentials:"include",...(options||{}),signal:controller.signal});
               const bytes=await r.arrayBuffer();
@@ -254,14 +261,22 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
                 throw httpError;
               }
               const parsed=JSON.parse(text);
+              if(Number(parsed?.code)===401)throw new Error("CRM_LOGIN_EXPIRED");
               if(parsed?.code&&Number(parsed.code)!==200)throw new Error(`CRM_API_${parsed.code}`);
+              if(Date.now()>=deadline)throw new Error("CRM_TOTAL_TIMEOUT");
               return parsed;
             }catch(error){
               lastError=error;
+              if(Date.now()>=deadline||String(error?.message||error).includes("CRM_TOTAL_TIMEOUT"))throw new Error("CRM_TOTAL_TIMEOUT");
               if(String(error?.message||error).includes("CRM_LOGIN_EXPIRED"))throw error;
               const httpStatus=Number(error?.httpStatus||0);
               if(httpStatus>=400&&httpStatus<500&&httpStatus!==408&&httpStatus!==429)throw error;
-              if(attempt<maxAttempts)await new Promise(r=>setTimeout(r,900*attempt));
+              clearTimeout(timer);
+              if(attempt<maxAttempts){
+                const delay=900*attempt;
+                if(Date.now()+delay>=deadline)throw new Error("CRM_TOTAL_TIMEOUT");
+                await new Promise(r=>setTimeout(r,delay));
+              }
             }finally{clearTimeout(timer);}
           }
           const endpoint=(()=>{try{const parsed=new URL(url);return `${parsed.hostname}${parsed.pathname}`}catch{return String(url)}})();
@@ -337,14 +352,22 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
           // preserved for same-slot Gap comparisons.
           for(let offset=0;offset<courseIds.length;offset+=2){
             const ids=courseIds.slice(offset,offset+2),openCourseList=ids.map(courseId=>({courseId,paramValue:[0,1],isAllSelect:true}));
-            let pageNo=1;
+            let pageNo=1,pairItemCount=0;
             while(true){
               const body={term_id:termId,class_id:classId,course_ids:ids,time_type:1,openCourseList,queryType:2};
-              let resp;
-              for(let attempt=1;attempt<=3;attempt++){try{resp=await api(`https://api-codecamp-crm.codemao.cn/annual/class/course-detail?page=${pageNo}&limit=500`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});break;}catch(error){if(attempt===3)throw error;await new Promise(r=>setTimeout(r,700*attempt));}}
-              const rows=resp.items||resp.data?.items||[];items.push(...rows);
+              // CRM caps this endpoint at 100 rows per page. Larger values
+              // return HTTP 400 and used to make the whole dashboard update fail.
+              const detailPageSize=100;
+              // api owns the retry budget: wrapping it would multiply three
+              // attempts into nine and retry permanent/authentication failures.
+              const resp=await api(`https://api-codecamp-crm.codemao.cn/annual/class/course-detail?page=${pageNo}&limit=${detailPageSize}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+              const rows=resp.items||resp.data?.items||[];
               const total=Number(resp.total??resp.data?.total??rows.length);
-              if(!rows.length||pageNo*500>=total)break;
+              if(!Array.isArray(rows)||!Number.isFinite(total)||total<0)throw new Error(`CRM_DETAIL_INVALID:${classId}:${pageNo}`);
+              pairItemCount+=rows.length;
+              if(!rows.length&&pairItemCount<total)throw new Error(`CRM_DETAIL_INCOMPLETE:${classId}:${pageNo}:${pairItemCount}/${total}`);
+              items.push(...rows);
+              if(!rows.length||pairItemCount>=total)break;
               pageNo++;
             }
           }
@@ -363,7 +386,7 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         const remainingPages=Array.from({length:Math.max(0,boardPages-1)},(_,index)=>index+2);
         const boardResponses=await mapLimit(remainingPages,4,page=>livePost("https://lbk-crm-teacher-web-api.codemao.cn/shengwang/living/boards",{page,limit:100,minLivingStartTime:windowStart,maxLivingStartTime:Math.min(windowEnd,nowSec+3600),livingTypes:[0]}));
         for(const next of boardResponses)boards.push(...(next.data?.items||[]));
-        if(!boards.length)throw new Error("CRM_LIVE_BOARDS_EMPTY");
+        // A successful empty room query means attendance is pending, not a failed teaching update.
         let comparisonLookupError=null;
         if(roomLookup){try{
           const extra=await roomLookup(output,windowStart,Math.min(windowEnd,nowSec));
@@ -416,7 +439,15 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
         // them in source order so duplicate-room reconciliation stays stable.
         let completedLiveRooms=0;
         const liveResults=await mapLimit(liveMatches,6,async match=>{
-          let attended,absent;try{[attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);}catch(error){if(match.board.source==='superset-472-3645'){for(const block of match.targets)block.liveMatchDiagnostics.comparisonRosterError=String(error.message||error);return null;}throw error;}
+          let attended,absent;try{[attended,absent]=await Promise.all([studentIds(match.board,true),studentIds(match.board,false)]);}catch(error){
+            const reason=String(error.message||error);
+            if(/CRM_LOGIN_EXPIRED|CRM_HTTP_40[13]|CRM_API_40[13]/.test(reason))throw error;
+            for(const block of match.targets){
+              block.liveMatchDiagnostics.comparisonRosterError=reason;
+              block.livePendingLessons=[...new Set([...(block.livePendingLessons||[]),match.lessonNumber])];
+            }
+            return null;
+          }
           completedLiveRooms++;
           if(completedLiveRooms===liveMatches.length||completedLiveRooms%5===0){
             await onProgress("正在读取CRM直播上座名单…",`6路并行 · 已完成 ${completedLiveRooms}/${liveMatches.length} 个直播房间`);
@@ -448,7 +479,10 @@ async function collectCrmData(classes,excludedTeachers=["薛超"],onProgress=asy
             block.liveAttendance[lessonNumber]=old;
           }
         }
-        if(!matchedLiveBoards)throw new Error("CRM_LIVE_BOARDS_CLASS_MISMATCH");
+        for(const block of output){
+          for(const number of block.livePendingLessons||[])delete (block.liveAttendance||{})[number];
+        }
+        // Unmatched/substitute rooms stay pending; never block unrelated lesson metrics.
         const brokenNames=output.filter(block=>String(block.info?.teacherName||"").includes("�"));
         if(brokenNames.length)throw new Error(`CRM_TEXT_ENCODING_INVALID:${brokenNames.map(x=>x.classId).join(",")}`);
         return JSON.stringify(output);
@@ -514,12 +548,17 @@ async function fetchComparisonLiveRooms(blocks,start,end){
   return [...grouped.values()];
 }
 
+function isCrmAuthenticationFailure(error){
+  const code=String(error?.code||error?.errorCode||"");
+  const message=String(error?.message||error?.error||error||"");
+  return code==="CRM_AUTH_REQUIRED"||/CRM_LOGIN_EXPIRED|CRM_(?:HTTP|API)_401(?:\b|:)|(?:CRM|Superset)\s*登录已失效/.test(message);
+}
+
 async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0,localBase=LOCAL_BASE){
-  const tabs=await chrome.tabs.query({url:"https://codecamp-crm.codemao.cn/*"});
-  if(!tabs.length)return {ok:false,error:"请先在当前浏览器打开并登录CRM后台；控制台不会另开页面。"};
-  const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
   try{
-    await waitForTabReady(tab.id);
+    // CRM collection runs in this extension's authenticated worker. A visible,
+    // loaded CRM tab is neither required nor proof of authentication; only the
+    // API response can establish whether this browser session is logged in.
     // Run API calls in the extension service worker. Host permissions allow
     // authenticated CRM requests without depending on page-frame lifetime or
     // page CORS, which previously caused intermittent `Failed to fetch`.
@@ -540,8 +579,9 @@ async function fetchInCrm(classes,excludedTeachers=["薛超"],reconnectAttempt=0
       await new Promise(resolve=>setTimeout(resolve,1200*attempt));
       return fetchInCrm(classes,excludedTeachers,attempt,localBase);
     }
-    const message=text.includes("CRM_LOGIN_EXPIRED")?"当前Chrome的CRM登录已失效，请重新登录后重试。":text.includes("CRM_TOTAL_TIMEOUT")||text.includes("aborted")?"CRM读取超过4分钟，已自动终止；系统将在15分钟后自动重试。":`CRM读取失败：${text}`;
-    return {ok:false,error:message};
+    const authRequired=isCrmAuthenticationFailure(error);
+    const message=authRequired?"当前浏览器的CRM登录已失效，请在运行此连接器的浏览器中重新登录后重试。":text.includes("CRM_TOTAL_TIMEOUT")||text.includes("aborted")?"CRM读取超过4分钟，已自动终止；请确认CRM连接正常后手动重试。":`CRM读取失败：${text}`;
+    return {ok:false,error:message,code:authRequired?"CRM_AUTH_REQUIRED":"CRM_READ_FAILED"};
   }
 }
 
@@ -567,6 +607,7 @@ async function fetchRenewalInCurrentChrome(renewalMonth){
     const results=await chrome.scripting.executeScript({
       target:{tabId:tab.id},world:"MAIN",args:[RENEWAL_COLUMN_NAMES,selectedMonth],
       func:async(columnNames,selectedMonth)=>{
+        try{
         if(!location.href.startsWith("https://bigdata-superset.codemao.cn/"))throw new Error("CRM_LOGIN_EXPIRED");
         const chartResponse=await fetch("/api/v1/chart/5014",{credentials:"include"});
         if(chartResponse.status===401||chartResponse.redirected)throw new Error("CRM_LOGIN_EXPIRED");
@@ -578,32 +619,55 @@ async function fetchRenewalInCurrentChrome(renewalMonth){
           {col:"renew_state",op:"IN",val:["首续"]},
           {col:"level_6_department_name",op:"IN",val:["深圳战区"]},
         ];
+        // The saved chart is a presentation template, not the renewal scope.
+        // Never inherit its teacher/group, SQL, native-filter or date constraints.
         for(const item of query.queries||[]){
-          item.filters=(item.filters||[]).filter(filter=>!["renew_month","renew_state","level_6_department_name"].includes(filter.col)||filter.op==="TEMPORAL_RANGE");
-          item.filters.push(...selectedFilters);item.row_limit=200000;item.row_offset=0;
+          item.filters=selectedFilters.map(filter=>({...filter}));
+          item.extras={...(item.extras||{}),where:"",having:""};
+          delete item.extras.time_range;
+          item.time_range="No filter";delete item.adhoc_filters;
+          item.row_limit=200000;item.row_offset=0;
         }
-        query.force=true;query.form_data=query.form_data||{};
-        query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:selectedFilters};
+        if(!query.queries?.length)throw new Error("CRM_RENEWAL_QUERY_MISSING");
+        query.force=true;
+        query.form_data={datasource:query.form_data?.datasource,viz_type:query.form_data?.viz_type,
+          filters:selectedFilters,adhoc_filters:[],time_range:"No filter",extra_filters:[],
+          extra_form_data:{filters:selectedFilters,time_range:"No filter"}};
         let csrf="";
         try{const tokenResponse=await fetch("/api/v1/security/csrf_token/",{credentials:"include"});if(tokenResponse.ok)csrf=(await tokenResponse.json()).result||"";}catch{}
         const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
-        const response=await fetch("/api/v1/chart/data",{method:"POST",credentials:"include",headers,body:JSON.stringify(query)});
-        if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");
-        if(!response.ok)throw new Error(`CRM_DATA_HTTP_${response.status}`);
-        const payload=await response.json();
-        const raw=payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];
-        if(!raw||!Array.isArray(raw.data))throw new Error("CRM_CHART_RESULT_INVALID");
+        let raw;
+        for(let attempt=0;attempt<2;attempt++){
+          const response=await fetch("/api/v1/chart/data",{method:"POST",credentials:"include",headers,body:JSON.stringify(query)});
+          if(response.status===401||response.redirected)throw new Error("CRM_LOGIN_EXPIRED");
+          if(response.status===403)throw new Error("CRM_RENEWAL_ACCESS_DENIED:当前CRM账号无权查询续费数据");
+          if(!response.ok)throw new Error(`CRM_DATA_HTTP_${response.status}`);
+          const payload=await response.json();
+          if(payload.error||payload.errors?.length)throw new Error("CRM_RENEWAL_QUERY_FAILED:CRM查询返回错误，未写入表格");
+          const results=payload.result;
+          if(!Array.isArray(results)||!results.length)throw new Error("CRM_CHART_RESULT_INVALID");
+          const failed=results.find(item=>item.error||item.status==="failed");
+          if(failed)throw new Error("CRM_RENEWAL_QUERY_FAILED:CRM查询执行失败，未写入表格");
+          const tables=results.filter(item=>Array.isArray(item.data));
+          if(tables.length!==1)throw new Error("CRM_RENEWAL_RESULT_AMBIGUOUS:续费明细返回多份或无效结果，未写入表格");
+          raw=tables[0];
+          if(raw.data.length)break;
+          if(Number(raw.rowcount||0)>0)throw new Error(`CRM_DATA_TRUNCATED:0/${raw.rowcount}`);
+        }
+        if(!raw.data.length)throw new Error(`CRM_RENEWAL_EMPTY:${selectedMonth} · 首续 · 深圳战区：CRM连续两次返回0条。请在同一CRM账号核对该月份及可见范围；原表未清空，不会自动改月份。`);
         const clean=value=>String(value??"").replace(/\s+/g," ").trim();
         const physical=(raw.colnames||Object.keys(raw.data[0]||{})).map(clean),verbose=raw.verbose_map||{};
         const display=physical.map(column=>clean(columnNames[column]||verbose[column]||column));
         const rows=raw.data.map(row=>Object.fromEntries(physical.map((column,index)=>[display[index],row[column]??row[display[index]]??""])));
         const rowcount=Number(raw.rowcount??rows.length);
         if(rowcount>rows.length)throw new Error(`CRM_DATA_TRUNCATED:${rows.length}/${rowcount}`);
-        return JSON.stringify({headers:display,rows,rowcount,renewalMonth:selectedMonth});
+        return JSON.stringify({headers:display,rows,rowcount,renewalMonth:selectedMonth,renewalScope:{version:1,groupScope:"all",region:"深圳战区",node:"首续",month:selectedMonth}});
+        }catch(error){return {renewalError:String(error?.message||error)}}
       }
     });
     const data=results[0]?.result;
-    if(!data)return {ok:false,error:"当前谷歌浏览器中的CRM页面没有返回续费数据。"};
+    if(data?.renewalError)throw new Error(data.renewalError);
+    if(typeof data!=="string"||!data)return {ok:false,error:"续费CRM未返回有效明细，请重新加载副本连接器后刷新页面；原表未修改。"};
     return {ok:true,data,tabId:tab.id,renewalMonth:selectedMonth};
   }catch(error){
     const text=String(error?.message||error);
@@ -695,11 +759,23 @@ function serviceTodayDate(selection){
   return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 }
 
+function configuredServiceGroup(config={}){
+  const title=String(config.displayTitle||"").trim();
+  const group=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
+  if(!group.endsWith("组")||/[\r\n]/.test(group)||group.length>40)throw new Error("请在配置面板的工作台名称填写本组名称，例如：深圳战区 · 致远组");
+  return group;
+}
 async function fetchServiceInCurrentChrome(requestedSelection){
+  let groupName;
+  try {
+    const configResponse=await fetch(LOCAL_BASE+"/config",{cache:"no-store"});
+    if(!configResponse.ok)throw new Error("副本配置读取失败");
+    groupName=configuredServiceGroup(await configResponse.json());
+  }catch(error){return {ok:false,error:String(error?.message||error)}}
   const tabs=await chrome.tabs.query({url:"https://bigdata-superset.codemao.cn/*"});
   if(!tabs.length)return {ok:false,error:"请先在当前谷歌浏览器打开并登录 Superset CRM；控制台不会另开页面。"};
   const tab=tabs.find(x=>x.active&&!x.discarded)||tabs.find(x=>!x.discarded)||tabs[0];
-  const serviceSelection=normalizeServiceSelection(requestedSelection),dates=serviceSelectedDates(serviceSelection),todayDate=serviceTodayDate(serviceSelection);
+  const serviceSelection={...normalizeServiceSelection(requestedSelection),groupName},dates=serviceSelectedDates(serviceSelection),todayDate=serviceTodayDate(serviceSelection);
   try{
     await waitForTabReady(tab.id);
     const results=await Promise.race([chrome.scripting.executeScript({
@@ -728,7 +804,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
           const nativeFilters=metadata.native_filter_configuration||[];
           const filterColumn=keywords=>{const filter=nativeFilters.find(item=>keywords.some(word=>normalize(item.name).includes(word)));return filter?.targets?.[0]?.column?.name||filter?.target?.column?.name||"";};
           const columns={
-            date:filterColumn(["具体发送日期","具体统计日期"]),zone:filterColumn(["战区"]),team:filterColumn(["团队"]),group:filterColumn(["小组"]),department:filterColumn(["部门"]),timeType:filterColumn(["时间类型"]),hour:filterColumn(["小时","时间区间","发送时间"]),
+            date:filterColumn(["具体发送日期","具体统计日期"]),zone:filterColumn(["战区"]),team:filterColumn(["团队"]),group:filterColumn(["小组"])||"level_7_department_name",department:filterColumn(["部门"]),timeType:filterColumn(["时间类型"]),hour:filterColumn(["小时","时间区间","发送时间"]),
           };
           const charts=chartsPayload.result||chartsPayload.charts||chartsPayload||[];
           const pick=async dimension=>{
@@ -753,10 +829,12 @@ async function fetchServiceInCurrentChrome(requestedSelection){
             const add=(column,value)=>{if(column&&value!=null&&(!Array.isArray(value)||value.length))baseDesired.push({col:column,op:"IN",val:Array.isArray(value)?value:[value]});};
             add(dateColumn,filterDates);add(columns.zone,"AI C++教学部");
             if(kind==="wecom")add(columns.team,"深圳战区");else add(columns.department,["探月教学中心","深空教学中心"]);
-            if(dimension==="老师")add(columns.group,"屹柯组");
+            if(!serviceSelection.groupName)throw new Error("CRM_SERVICE_GROUP_MISSING");
+            if(dimension==="老师"&&!columns.group)throw new Error("CRM_SERVICE_GROUP_COLUMN_MISSING");
+            add(columns.group,serviceSelection.groupName);
             const serviceHours=serviceSelection.hours;
             const headers={"content-type":"application/json"};if(csrf)headers["x-csrftoken"]=csrf;
-            const execute=async extraFilters=>{const sortedDates=[...filterDates].sort(),end=new Date(`${sortedDates.at(-1)}T00:00:00Z`);end.setUTCDate(end.getUTCDate()+1);const timeRange=`${sortedDates[0]}T00:00:00 : ${end.toISOString().slice(0,10)}T00:00:00`;const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col));item.filters.push(...desired);item.time_range=timeRange;item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};query.form_data.time_range=timeRange;query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired,time_range:timeRange};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
+            const execute=async extraFilters=>{const sortedDates=[...filterDates].sort(),end=new Date(`${sortedDates.at(-1)}T00:00:00Z`);end.setUTCDate(end.getUTCDate()+1);const timeRange=`${sortedDates[0]}T00:00:00 : ${end.toISOString().slice(0,10)}T00:00:00`;const desired=[...baseDesired,...extraFilters],query=JSON.parse(JSON.stringify(queryTemplate)),targetColumns=new Set(desired.map(x=>x.col));for(const item of query.queries||[]){item.filters=(item.filters||[]).filter(filter=>!targetColumns.has(filter.col));item.filters.push(...desired);item.extras={...(item.extras||{}),where:"",having:""};delete item.adhoc_filters;item.time_range=timeRange;item.row_limit=200000;item.row_offset=0;}query.force=true;query.form_data=query.form_data||{};query.form_data.time_range=timeRange;query.form_data.extra_form_data={...(query.form_data.extra_form_data||{}),filters:desired,time_range:timeRange};const payload=await api("/api/v1/chart/data",{method:"POST",headers,body:JSON.stringify(query)});return payload.result?.find(item=>Array.isArray(item.data))||payload.result?.[0];};
             let raw;
             if(kind==="wecom"&&!columns.hour&&columns.timeType){
               const variants=[["工作时间"],["工作时段"],serviceHours,serviceHours.map(x=>`${x}时`),serviceHours.map(x=>`${x}点`),serviceHours.map(x=>`${x}:00`),serviceHours.map(x=>`${x}:00-${x}:59`),serviceHours.map(x=>Number(x))];
@@ -892,7 +970,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
           const errors={};for(const [kind,value] of [["im",todayIm],["wecom",todayWecom]])for(const [dimension,error] of Object.entries(value.errors))errors[`${kind}.${dimension}`]=error;
           today={dates:[todayDate],im:todayIm,wecom:todayWecom,errors,status:Object.keys(errors).length?"partial":"ok"};
         }
-        return JSON.stringify({dates,im,wecom,today,serviceSelection});
+        return JSON.stringify({dates,im,wecom,today,serviceSelection,groupName:serviceSelection.groupName});
       }catch(error){return JSON.stringify({__serviceError:String(error?.message||error)});}
       }
     }),new Promise((_,reject)=>setTimeout(()=>reject(new Error("CRM_SERVICE_TOTAL_TIMEOUT")),240000))]);
@@ -991,6 +1069,7 @@ async function runComparisonUpdate(localBase=LOCAL_BASE){
   await chrome.storage.local.set({[key]:{runningSince:now,slotKey:'comparison-manual'}});
   const stop=startMcpRelay(localBase);
   try{
+    if(localBase.endsWith(":8766")){replicaStatusOwners.set(localBase,`manual-${Date.now()}-${Math.random().toString(16).slice(2)}`);await waitForLocalPreparation("comparison-manual",20000,localBase);}
     await postLocalStatus('running','正在独立更新其他组老师…','组内老师数据保持不变','crm',localBase);
     const input=await (await fetchWithTimeout(`${localBase}/comparison-input`,{},20000)).json();
     const names=new Set(input.comparisonTeachers||[]),blocks=input.blocks||[];
@@ -1007,7 +1086,7 @@ async function runComparisonUpdate(localBase=LOCAL_BASE){
     await waitForLocalCompletion(now,10*60*1000,localBase);
     return {ok:true};
   }catch(error){await postLocalStatus('error','其他组老师更新失败',String(error.message||error),'comparison',localBase);throw error;}
-  finally{stop();await chrome.storage.local.remove(key);}
+  finally{stop();if(localBase.endsWith(":8766"))replicaStatusOwners.delete(localBase);await chrome.storage.local.remove(key);}
 }
 
 async function uploadCrmData(data,localBase=LOCAL_BASE){
@@ -1149,6 +1228,7 @@ async function waitForLocalRunner(startedAt,timeout=20*1000,localBase=LOCAL_BASE
 
 async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
   localBase=normalizeLocalBase(localBase);
+  if(localBase.endsWith(":8766")&&!String(slotKey).startsWith("manual"))return {ok:false,error:"副本已关闭自动更新，请手动点击教学数据更新"};
   const runtimeKey=instanceStorageKey("updateRuntime",localBase),scheduleKey=instanceStorageKey("autoSchedule",localBase);
   await reconcileUpdateRuntime(localBase);
   const now=Date.now();
@@ -1158,6 +1238,7 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
   if(Number(lock.runningSince||0)&&now-Number(lock.runningSince)<32*60*1000)return {ok:false,error:"当前工作台已有更新正在运行，请等待本轮完成"};
   if(activeUpdateRuns.has(localBase))return {ok:false,error:"当前工作台已有更新正在运行"};
   activeUpdateRuns.add(localBase);
+  if(localBase.endsWith(":8766"))replicaStatusOwners.set(localBase,`manual-${now}-${Math.random().toString(16).slice(2)}`);
   let schedule={};
   try{
   await chrome.storage.local.set({[runtimeKey]:{runningSince:now,slotKey}});
@@ -1218,18 +1299,18 @@ async function runScheduledUpdate(slotKey="manual",localBase=LOCAL_BASE){
     return {ok:true};
   }catch(error){
     const message=String(error?.message||error).replace(/^SCHEDULE_COOLDOWN:/,"");
-    const waitingForCrm=/请先在当前浏览器打开并登录CRM后台|请先在当前谷歌浏览器打开并登录续费CRM后台|CRM_LOGIN_EXPIRED|当前浏览器.*登录CRM|Superset登录已失效/i.test(message);
+    const waitingForCrm=isCrmAuthenticationFailure({message});
     const latest=(await chrome.storage.local.get(scheduleKey))[scheduleKey]||schedule;
     const sameFailure=String(latest.lastFailureKey||"")===String(slotKey);
     const failureCount=sameFailure?Number(latest.failureCount||0)+1:1;
     await chrome.storage.local.set({[scheduleKey]:{...latest,lastRun:new Date().toLocaleString("zh-CN",{hour12:false}),lastResult:message,lastFailureKey:slotKey,lastFailureAt:Date.now(),failureCount}});
     await appendRunLog("更新失败",message,localBase);
-    await postLocalStatus(waitingForCrm?"waiting":"error",waitingForCrm?"自动更新等待 CRM 登录":"自动更新失败",waitingForCrm?`${message}；本时段会继续自动重试。`:message,stage,localBase);
+    await postLocalStatus(waitingForCrm?"waiting":"error",waitingForCrm?"教学更新需要重新登录 CRM":"教学数据更新失败",waitingForCrm?`${message}；请登录后手动重试。`:message,stage,localBase);
     return {ok:false,error:message};
   }finally{
     if(stopMcpRelay)stopMcpRelay();
     try{await chrome.storage.local.remove(runtimeKey);}
-    finally{activeUpdateRuns.delete(localBase);}
+    finally{activeUpdateRuns.delete(localBase);if(localBase.endsWith(":8766"))replicaStatusOwners.delete(localBase);}
   }
 }
 
@@ -1290,44 +1371,34 @@ async function ensureScheduleHealth(force=false,localBase=LOCAL_BASE){
 }
 
 chrome.alarms.onAlarm.addListener(async alarm=>{
-  if(alarm.name.startsWith("codemao-test-update-")){await setSchedule({enabled:false},"http://127.0.0.1:8766");return;}
-  if(alarm.name==="codemao-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8765");
-  if(alarm.name==="codemao-test-update-watchdog")return checkMissedSchedules("http://127.0.0.1:8766");
-  if(alarm.name==="codemao-update-half-hour"||alarm.name==="codemao-test-update-half-hour"){
-    const localBase=alarm.name.startsWith("codemao-test-update-")?"http://127.0.0.1:8766":"http://127.0.0.1:8765",prefix=instanceAlarmPrefix(localBase);
-    const scheduleKey=instanceStorageKey("autoSchedule",localBase),stored=await chrome.storage.local.get(scheduleKey),schedule=stored[scheduleKey]||{};
-    if(!schedule.enabled)return;
-    const slot=halfHourSlotKey(prefix);
-    await chrome.storage.local.set({[scheduleKey]:{...schedule,lastAlarmAt:new Date().toLocaleString("zh-CN",{hour12:false}),lastAlarmSlot:slot.key}});
-    return runScheduledUpdate(slot.key,localBase);
-  }
-  if(alarm.name.startsWith("codemao-update-")||alarm.name.startsWith("codemao-test-update-")){
-    const now=new Date(),today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-    const localBase=alarm.name.startsWith("codemao-test-update-")?"http://127.0.0.1:8766":"http://127.0.0.1:8765";
-    return runScheduledUpdate(`${alarm.name}|${today}`,localBase);
-  }
+  if(alarm.name.startsWith("codemao-"))await chrome.alarms.clear(alarm.name);
 });
-chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
-chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8765")});
+chrome.runtime.onStartup.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
+chrome.runtime.onInstalled.addListener(()=>{injectDashboardBridge();return ensureScheduleHealth(true,"http://127.0.0.1:8766")});
 injectDashboardBridge();
-setSchedule({enabled:false},"http://127.0.0.1:8766");
-ensureScheduleHealth(false,"http://127.0.0.1:8765");
+// The replica is manual-only.  Clear legacy alarms and persisted schedules
+// from older connector versions as soon as the extension starts, so a stale
+// 8766 schedule can never write a misleading CRM error into the replica.
+setSchedule({enabled:false},"http://127.0.0.1:8766").catch(()=>{});
+ensureScheduleHealth(false,"http://127.0.0.1:8766");
 
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  if(message?.source!=="codemao-dashboard")return;
-  if(message.type==="ping"){leaseMcpRelay(normalizeLocalBase(message.localBase));sendResponse({ok:true,version:chrome.runtime.getManifest().version,build:"half-hour-schedule-43-live-class-source"});return;}
+  if(message?.source!=="codemao-replica-dashboard")return;
+  if(!/^http:\/\/(127\.0\.0\.1|localhost):8766$/.test(String(message.localBase||""))||(sender?.url&&!/^http:\/\/(127\.0\.0\.1|localhost):8766(?:\/|$)/.test(sender.url))){sendResponse({ok:false,error:"此连接器仅支持副本8766，已拒绝其他工作台请求"});return;}
+  if(message.connectorId&&message.connectorId!==chrome.runtime.id)return;
+  if(message.type==="ping"){sendResponse({ok:true,version:chrome.runtime.getManifest().version,instance:"replica",port:8766,extensionId:chrome.runtime.id,build:"replica-isolated-76"});return;}
   if(message.type==="reload-extension"){sendResponse({ok:true,reloading:true});setTimeout(()=>chrome.runtime.reload(),150);return;}
   if(message.type==='update-comparison'){
     runComparisonUpdate(message.localBase).then(sendResponse).catch(error=>sendResponse({ok:false,error:String(error.message||error)}));return true;
   }
-  if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"],0,normalizeLocalBase(message.localBase)).then(sendResponse);return true;}
+  if(message.type==="fetch-crm"){fetchInCrm(message.classes||[],message.excludedTeachers||["薛超"],0,normalizeLocalBase(message.localBase)).then(sendResponse).catch(error=>sendResponse({ok:false,error:String(error?.message||error)}));return true;}
   if(message.type==="prepare-cohort-classes"){
     leaseMcpRelay(normalizeLocalBase(message.localBase));
     waitForLocalPreparation("manual",2*60*1000,normalizeLocalBase(message.localBase),"prepare-cohort-exception").then(sendResponse).catch(error=>sendResponse({ok:false,error:String(error?.message||error)}));return true;
   }
-  if(message.type==="fetch-renewal"){leaseMcpRelay(normalizeLocalBase(message.localBase));fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse);return true;}
-  if(message.type==="fetch-nct"){fetchNctInCurrentChrome(message.filters||{}).then(sendResponse);return true;}
+  if(message.type==="fetch-renewal"){leaseMcpRelay(normalizeLocalBase(message.localBase));fetchRenewalInCurrentChrome(message.renewalMonth).then(sendResponse).catch(error=>sendResponse({ok:false,error:String(error?.message||error)}));return true;}
+  if(message.type==="fetch-nct"){leaseMcpRelay(normalizeLocalBase(message.localBase));fetchNctInCurrentChrome(message.filters||{}).then(sendResponse).catch(error=>sendResponse({ok:false,error:String(error?.message||error)}));return true;}
   if(message.type==="fetch-service"){
     // Manual service updates also hand data to a local writer which may need
     // DingTalk MCP. Keep the relay alive through that asynchronous write.
@@ -1337,10 +1408,11 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
       .catch(error=>sendResponse({ok:false,error:`教学服务数据读取失败：${String(error?.message||error)}`}));
     return true;
   }
-  if(message.type==="get-schedule"){const localBase=normalizeLocalBase(message.localBase);const key=instanceStorageKey("autoSchedule",localBase);reconcileUpdateRuntime(localBase).then(()=>chrome.storage.local.get(key)).then(x=>sendResponse({ok:true,version:chrome.runtime.getManifest().version,schedule:x[key]||{enabled:false,mode:"half-hour",intervalMinutes:30,days:[1,2,3,4,5,6,0],times:[],lastRun:"",lastResult:""}}));return true;}
+  if(message.type==="get-schedule"){const localBase=normalizeLocalBase(message.localBase);leaseMcpRelay(localBase);const key=instanceStorageKey("autoSchedule",localBase);const read=localBase.endsWith(":8766")?setSchedule({enabled:false},localBase).then(()=>({enabled:false,mode:"manual-only",intervalMinutes:0,days:[],times:[],lastRun:"",lastResult:"副本已关闭自动更新，请手动点击教学数据更新"})):reconcileUpdateRuntime(localBase).then(()=>chrome.storage.local.get(key).then(x=>x[key]||{enabled:false,mode:"half-hour",intervalMinutes:30,days:[1,2,3,4,5,6,0],times:[],lastRun:"",lastResult:""}));read.then(schedule=>sendResponse({ok:true,version:chrome.runtime.getManifest().version,schedule})).catch(error=>sendResponse({ok:false,error:`更新设置读取失败：${String(error?.message||error)}`}));return true;}
   if(message.type==="set-schedule"){const localBase=normalizeLocalBase(message.localBase);setSchedule(message.schedule||{},localBase).then(schedule=>sendResponse({ok:true,schedule}));return true;}
   if(message.type==="run-scheduled-now"){
-    const localBase=/^http:\/\/(127\.0\.0\.1|localhost):876[56]$/.test(String(message.localBase||""))?String(message.localBase):LOCAL_BASE;
+    const localBase=/^http:\/\/(127\.0\.0\.1|localhost):8766$/.test(String(message.localBase||""))?String(message.localBase):LOCAL_BASE;
+    if(localBase.endsWith(":8766")){sendResponse({ok:true,started:true});runScheduledUpdate(`manual-${Date.now()}`,localBase).catch(()=>{});return;}
     const prefix=instanceAlarmPrefix(localBase);
     chrome.alarms.create(`${prefix}-manual-${Date.now()}`,{when:Date.now()+250}).then(()=>sendResponse({ok:true,started:true}));
     return true;

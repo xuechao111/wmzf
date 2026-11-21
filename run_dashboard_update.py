@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import msvcrt
@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import base64
+from collections import Counter
 from pathlib import Path
 
 from overview_total_table import SHEET_NAME as OVERVIEW_TOTAL_SHEET_NAME
@@ -25,13 +26,13 @@ except Exception:
     pass
 
 SOURCE_ROOT = Path(__file__).resolve().parent
-ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or SOURCE_ROOT)
+from runtime_paths import runtime_root
+ROOT = runtime_root()
 DATA = ROOT / "run-data"
 CONFIG = ROOT / "dashboard-config.json"
 STATUS = ROOT / "status.json"
 UPDATE_LOCK = ROOT / "update.lock"
 SKILL = SOURCE_ROOT
-LEGACY_SYNC = Path(r"C:\Users\user\Desktop\Documents\编程猫管理skill\codemao-student-profile-extracted\codemao-course-data\sync.py")
 NODE = next(
     (path for path in (
         SOURCE_ROOT / "runtime" / "node" / "node.exe",
@@ -47,7 +48,7 @@ CRM_URL = "https://codecamp-crm.codemao.cn/layout/my-class"
 CURRENT_WEEK_ONLY_SHEETS = {"未准时参播学员", "推荐话术", "课期异常", "连续2周及以上未完课"}
 CURRENT_WEEK_CLEAR_LIMIT = 6000
 STYLE_STATE = DATA / "style-state.json"
-STYLE_LAYOUT_VERSION = 2
+STYLE_LAYOUT_VERSION = 3
 DISABLED_SHEETS = {"推荐话术"}
 RUN_STARTED_AT = ""
 SHEET_IDS: dict[str, str] = {}
@@ -109,7 +110,13 @@ def validate_abnormal_summary(table, snapshot):
             actual.setdefault(row[1], set()).add(str(row[4]))
     for teacher in expected.keys() | actual.keys():
         if expected.get(teacher, set()) != actual.get(teacher, set()):
-            raise RuntimeError(f"异常学员与教学看板未完课名单不一致：{teacher}，已停止写入")
+            expected_ids = expected.get(teacher, set())
+            actual_ids = actual.get(teacher, set())
+            raise RuntimeError(
+                f"异常学员与教学看板未完课名单不一致：{teacher}，"
+                f"看板{len(expected_ids)}人/异常表{len(actual_ids)}人，"
+                f"异常表缺少{len(expected_ids - actual_ids)}人/多出{len(actual_ids - expected_ids)}人，已停止写入"
+            )
     from build_exception_exports import build_abnormal_summary
     summary = table.get("summary", {})
     generated = build_abnormal_summary(table.get("data", []), "")
@@ -218,7 +225,7 @@ def set_status(state: str, message: str, detail: str = "") -> None:
 def crm_pages() -> list[dict]:
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open("http://127.0.0.1:9222/json/list", timeout=3) as response:
+        with opener.open("http://127.0.0.1:9223/json/list", timeout=3) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception:
         return []
@@ -230,7 +237,7 @@ def ensure_crm_ready() -> None:
         if not CHROME.exists():
             raise RuntimeError("未找到 Chrome，无法打开 CRM 专用登录窗口。")
         CRM_PROFILE.mkdir(exist_ok=True)
-        subprocess.Popen([str(CHROME), "--remote-debugging-port=9222", f"--user-data-dir={CRM_PROFILE}", CRM_URL])
+        subprocess.Popen([str(CHROME), "--remote-debugging-port=9223", f"--user-data-dir={CRM_PROFILE}", CRM_URL])
         time.sleep(4)
         pages = crm_pages()
     if not any("codecamp-crm.codemao.cn" in str(page.get("url") or "") for page in pages if page.get("type") == "page"):
@@ -239,7 +246,7 @@ def ensure_crm_ready() -> None:
 
 def open_crm_login() -> None:
     try:
-        target = "http://127.0.0.1:9222/json/new?" + urllib.parse.quote(CRM_URL, safe="")
+        target = "http://127.0.0.1:9223/json/new?" + urllib.parse.quote(CRM_URL, safe="")
         request = urllib.request.Request(target, method="PUT")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(request, timeout=3):
@@ -254,14 +261,7 @@ def credentials() -> tuple[str, str]:
     configured_token = str(configured.get("dingtalkAccessKey") or "").strip()
     if configured_url:
         return configured_url, configured_token
-    if not LEGACY_SYNC.exists():
-        raise RuntimeError("请先在工作台配置面板填写钉钉连接地址")
-    text = LEGACY_SYNC.read_text(encoding="utf-8", errors="ignore")
-    url = re.search(r'MCP_URL\s*=\s*"([^"]+)"', text)
-    token = re.search(r'ACCESS_TOKEN\s*=\s*"([^"]+)"', text)
-    if not url or not token:
-        raise RuntimeError("未找到钉钉 MCP 配置")
-    return url.group(1), token.group(1)
+    raise RuntimeError("请在副本配置面板填写自己的钉钉连接地址；不会借用主看板授权")
 
 
 MCP_URL, MCP_TOKEN = credentials()
@@ -338,6 +338,17 @@ def mcp_call_with_extension_relay(body: bytes, timeout: int = 120):
     raise TimeoutError("Chrome 连接器钉钉中继请求超时，请确认连接器已重新加载并保持启用。")
 
 
+def _mcp_operation_failure(name, arguments, timeout, attempts, code, message):
+    # Retry only known read operations and explicit temporary upstream failures.
+    # A rejected write, permission failure, or workbook conflict must stop.
+    transient = re.search(r"can't connect|cannot connect|connection reset|connection refused|timed?\s*out|temporarily unavailable|service unavailable", str(message), re.I)
+    if name in {"get_range", "get_sheet", "get_all_sheets"} and attempts > 1 and transient:
+        print(f"钉钉读取 {name} 暂时不可用，重试剩余 {attempts - 1} 次…", flush=True)
+        time.sleep(1.5)
+        return mcp_call(name, arguments, timeout, attempts - 1)
+    raise RuntimeError(f"钉钉接口 {name} 执行失败：{code}: {message}")
+
+
 def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
     payload = {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": name, "arguments": arguments}, "id": 1}
     body = json.dumps(payload).encode("utf-8")
@@ -390,14 +401,27 @@ def mcp_call(name: str, arguments: dict, timeout: int = 120, attempts: int = 3):
         raise RuntimeError(f"钉钉接口 {name} 未返回结果")
     if result.get("error"):
         raise RuntimeError(str(result["error"]))
-    content = result.get("result", {}).get("content", [])
+    tool_result = result.get("result", {})
+    if tool_result.get("isError") is True:
+        messages = [str(item.get("text") or "") for item in tool_result.get("content", []) if isinstance(item, dict)]
+        return _mcp_operation_failure(name, arguments, timeout, attempts, "MCP_TOOL_ERROR", ' '.join(messages) or 'MCP_TOOL_ERROR')
+    content = tool_result.get("content", [])
     if content and isinstance(content[0], dict):
         text = content[0].get("text", "{}")
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
         except json.JSONDecodeError:
             return {"text": text}
-    return result.get("result", {})
+    else:
+        parsed = tool_result
+    # HTTP/JSON-RPC success does not prove the spreadsheet operation succeeded.
+    # Only explicit failure flags on the operation envelope are authoritative;
+    # values inside learner/business rows must remain ordinary data.
+    if isinstance(parsed, dict) and (parsed.get("success") is False or parsed.get("isError") is True):
+        code = parsed.get("errorCode") or "MCP_OPERATION_FAILED"
+        message = parsed.get("errorMsg") or parsed.get("message") or parsed.get("error") or "操作未完成"
+        return _mcp_operation_failure(name, arguments, timeout, attempts, code, message)
+    return parsed
 
 
 def cached_sheet_ids() -> dict[str, str]:
@@ -527,32 +551,59 @@ def col_letter(index: int) -> str:
     return result
 
 
-def clear_stale_rows(sheet_id: str, width: int, start_row: int, end_row: int, required: bool = False) -> None:
+def clear_generated_range(sheet_id: str, first_col: int, last_col: int,
+                          start_row: int, end_row: int, clear_type: str = "content",
+                          sheet_name: str = "") -> None:
+    """Clear an exact generated rectangle in requests of at most 1,300 cells."""
+    if start_row > end_row:
+        return
+    width = last_col - first_col + 1
+    if not 1 <= width <= 1300 or start_row < 1 or first_col < 0:
+        raise ValueError("无效的生成区域清理范围")
+    batch_rows = max(1, 1300 // width)
+    for first in range(start_row, end_row + 1, batch_rows):
+        last = min(first + batch_rows - 1, end_row)
+        address = f"{col_letter(first_col)}{first}:{col_letter(last_col)}{last}"
+        try:
+            result = mcp_call("clear_range", {
+                "nodeId": WORKBOOK, "sheetId": sheet_id,
+                "range": address, "type": clear_type,
+            }, 180)
+            if isinstance(result, dict) and result.get("success") is False:
+                raise RuntimeError(str(result.get("errorMsg") or result))
+        except Exception as exc:
+            raise RuntimeError(f"清理子表 {sheet_name or sheet_id}（{sheet_id}）范围 {address} 失败：{exc}") from exc
+
+
+def clear_consecutive_legacy_columns(sheet_id: str) -> None:
+    """Remove only the retired generated G:S area in bounded model calls.
+
+    DingTalk's internal model has a six-second operation deadline even when
+    the HTTP client waits longer. A 78,000-cell all-clear repeatedly exceeds
+    that deadline. Keep the exact legacy coverage, including stale styles,
+    but never send more than 6,500 cells in one operation.
+    """
+    clear_generated_range(sheet_id, 6, 18, 1, 6000, "all", "连续2周及以上未完课")
+
+
+
+def clear_stale_rows(sheet_id: str, width: int, start_row: int, end_row: int, required: bool = False, sheet_name: str = "") -> None:
     """Clear old generated rows while preserving manual columns to the right."""
     if start_row > end_row:
         return
-    end_col = col_letter(width - 1)
-    result = mcp_call("clear_range", {
-        "nodeId": WORKBOOK,
-        "sheetId": sheet_id,
-        "range": f"A{start_row}:{end_col}{end_row}",
-        "type": "content",
-    }, 180)
-    if isinstance(result, dict) and result.get("success") is False:
-        error = result.get("errorMsg") or result
-        if required:
-            raise RuntimeError(f"清理 {sheet_id} 的历史周数据失败：{error}")
-        print(f"{sheet_id} 尾部旧数据清理警告：{error}", flush=True)
+    # Fail on a rejected write, including optional legacy callers: never report
+    # successful replacement while stale generated data remains visible.
+    clear_generated_range(sheet_id, 0, width - 1, start_row, end_row, "content", sheet_name)
 
 
 def verify_current_week_only(sheet_id: str, table: dict) -> None:
-    """Fail if a rolling sheet has stale periods or differs from this run's dynamic row count."""
+    """Verify each cohort's generated periods and identities, including mixed latest weeks."""
     width = len(table["columns"])
     end_col = col_letter(width - 1)
     expected = table.get("data", [])
     expected_end_row = len(expected) + 1
     # Verify the populated region in chunks, then probe both the first cleared
-    # rows and the far tail. clear_range is atomic; downloading all 6,000 rows
+    # rows and the far tail. Every clear batch must succeed; downloading all 6,000 rows
     # again only adds latency without increasing correctness.
     max_rows_per_read = max(1, 30000 // width)
     rows = []
@@ -563,12 +614,35 @@ def verify_current_week_only(sheet_id: str, table: dict) -> None:
             raise RuntimeError(f"{sheet_id} 校验读取失败：{result.get('errorMsg') or result}")
         rows.extend(find_rows(result) or [])
     populated = [row for row in rows[1:] if any(value not in (None, "") for value in row[:width])]
-    expected_period = str(expected[0][-1]) if expected else ""
-    periods = {str(row[width - 1]) for row in populated if len(row) >= width and row[width - 1] not in (None, "")}
-    if len(populated) != len(expected) or periods != ({expected_period} if expected_period else set()):
+    # Paused/completed cohorts legitimately retain their own latest populated
+    # week. The first row's week is not an authoritative period for other cohorts.
+    # Compare identity + all period columns as a multiset so a swapped week,
+    # duplicated learner or stale row still fails even with the same row count.
+    period_columns = [i for i, name in enumerate(table["columns"]) if "周期" in str(name)]
+    if not period_columns:
+        raise RuntimeError(f"{sheet_id} 周期校验缺少明确的周期列，已停止报告成功。")
+    identity_columns = [i for i, name in enumerate(table["columns"])
+                        if "id" in str(name).lower() or str(name) in
+                        {"老师姓名", "老师", "学生姓名", "学员姓名", "课期", "班型", "班级", "异常类型", "直播课节"}]
+    verification_columns = sorted(set(identity_columns + period_columns))
+
+    def cell(row, index):
+        value = row[index] if index < len(row) else ""
+        if value is None:
+            return ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value == int(value):
+            return str(int(value))
+        return str(value).strip()
+
+    def signatures(data, columns):
+        return Counter(tuple(cell(row, i) for i in columns) for row in data)
+
+    expected_periods = sorted(signatures(expected, period_columns))
+    actual_periods = sorted(signatures(populated, period_columns))
+    if len(populated) != len(expected) or signatures(populated, verification_columns) != signatures(expected, verification_columns):
         raise RuntimeError(
-            f"{sheet_id} 当周数据校验失败：应为 {len(expected)} 行、周期 {expected_period or '空'}；"
-            f"实际 {len(populated)} 行、周期 {sorted(periods)}"
+            f"{sheet_id} 本轮数据校验失败：应为 {len(expected)} 行、周期 {expected_periods or '空'}；"
+            f"实际 {len(populated)} 行、周期 {actual_periods}；老师/班级/学员与周期对应关系不一致。"
         )
     tail_ranges = []
     clear_start = expected_end_row + 1
@@ -1078,27 +1152,17 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
     else:
         rows = [table["columns"]] + table.get("data", [])
         width = len(table["columns"])
-    if name == OVERVIEW_TOTAL_SHEET_NAME:
+    if name == OVERVIEW_TOTAL_SHEET_NAME and initialize_layout:
         # The sheet used to contain comparison columns. Clear the complete
         # right-hand tail before writing the compact layout so old columns
         # cannot remain visible after the schema shrinks.
-        mcp_call("clear_range", {
-            "nodeId": WORKBOOK,
-            "sheetId": sheet_id,
-            "range": f"{col_letter(width)}1:AZ6000",
-            "type": "all",
-        }, 180)
-    if name == "连续2周及以上未完课":
+        clear_generated_range(str(sheet_id), width, 51, 1, 6000, "all", name)
+    if name == "连续2周及以上未完课" and initialize_layout:
         # The former version used G:S for learner-level follow-up details. The
         # sheet is now teacher-summary only, so remove those values and styles
         # before writing the compact six-column table. G1 is reused below for
         # the refresh timestamp.
-        mcp_call("clear_range", {
-            "nodeId": WORKBOOK,
-            "sheetId": sheet_id,
-            "range": "G1:S6000",
-            "type": "all",
-        }, 180)
+        clear_consecutive_legacy_columns(str(sheet_id))
     end_col = col_letter(width - 1)
     # Keep each request below DingTalk's 30,000-cell limit while avoiding the
     # many tiny 180-row writes that dominated large detail-sheet refreshes.
@@ -1109,7 +1173,11 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
         args = {"nodeId": WORKBOOK, "sheetId": sheet_id, "rangeAddress": f"A{r1}:{end_col}{r2}", "values": values, "format": "auto"}
         try:
             mcp_call("update_range", args, 180)
-        except Exception:
+        except Exception as exc:
+            # Only a parameter-schema rejection permits the compatibility alias.
+            # Authorization, timeout and server failures must not replay writes.
+            if not re.search(r"(?:unknown|unexpected|unrecognized|unsupported|invalid)\s+(?:argument|parameter|field).*rangeAddress|rangeAddress.*(?:unknown|unexpected|unrecognized|unsupported|invalid)", str(exc), re.I):
+                raise
             args.pop("rangeAddress")
             args["range"] = f"A{r1}:{end_col}{r2}"
             mcp_call("update_range", args, 180)
@@ -1117,12 +1185,12 @@ def write_sheet(name: str, table: dict, updated_at: str = "") -> int:
     # generated sheets keep the smaller compatibility cleanup used historically.
     clear_start = len(rows) + 1
     if name in CURRENT_WEEK_ONLY_SHEETS:
-        clear_stale_rows(sheet_id, width, clear_start, CURRENT_WEEK_CLEAR_LIMIT, required=True)
+        clear_stale_rows(sheet_id, width, clear_start, CURRENT_WEEK_CLEAR_LIMIT, required=True, sheet_name=name)
         verify_current_week_only(sheet_id, table)
     elif name == "异常学员":
-        clear_stale_rows(sheet_id, width, clear_start, CURRENT_WEEK_CLEAR_LIMIT, required=True)
+        clear_stale_rows(sheet_id, width, clear_start, CURRENT_WEEK_CLEAR_LIMIT, required=True, sheet_name=name)
     else:
-        clear_stale_rows(sheet_id, width, clear_start, clear_start + 39)
+        clear_stale_rows(sheet_id, width, clear_start, clear_start + 39, sheet_name=name)
     apply_explicit_number_formats(sheet_id, table)
     if updated_at:
         stamp_col = col_letter(width)
@@ -1179,7 +1247,7 @@ def run(from_raw: bool = False) -> None:
         if "windowStart=monday.getTime()/1000-21*86400" not in fetch_source:
             raise RuntimeError("教学数据采集脚本版本过旧：缺少三周同期窗口，已停止以避免生成空 Gap。")
         fetch = subprocess.run(
-            [str(NODE), str(fetch_script), "9222", str(DATA / "classes.json"), str(DATA / "group-lessons-raw.json"), "0", "0", "2"],
+            [str(NODE), str(fetch_script), "9223", str(DATA / "classes.json"), str(DATA / "group-lessons-raw.json"), "0", "0", "2"],
             cwd=SKILL / "scripts", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace"
         )
@@ -1219,6 +1287,8 @@ def run(from_raw: bool = False) -> None:
     tables = dict(dashboard["sheets"])
     tables.update(export["tables"])
     snapshot = json.loads((ROOT / "dashboard-snapshot.json").read_text(encoding="utf-8"))
+    from live_pending import apply_live_pending
+    apply_live_pending(tables, snapshot)
     validate_abnormal_summary(export["tables"]["异常学员"], snapshot)
     tables[OVERVIEW_TOTAL_SHEET_NAME] = build_overview_total_table(snapshot)
     # Stop syncing retired views while preserving existing workbook sheets.

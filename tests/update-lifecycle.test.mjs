@@ -8,7 +8,7 @@ function harness({phase='local',owner=false,serviceFail=false}={}){
  const state={updateRuntime:{runningSince:Date.now(),slotKey:'slot'},autoSchedule:{}};
  const calls=[];let ctx;
  const active=new Set(owner?['main']:[]);
- ctx={LOCAL_BASE:'main',CRM_RUNTIME_TIMEOUT_MS:360000,LOCAL_RUNTIME_TIMEOUT_MS:660000,activeUpdateRuns:active,
+ ctx={LOCAL_BASE:'main',CRM_RUNTIME_TIMEOUT_MS:360000,LOCAL_RUNTIME_TIMEOUT_MS:660000,activeUpdateRuns:active,replicaStatusOwners:new Map(),
  normalizeLocalBase:x=>x,instanceStorageKey:n=>n,
  chrome:{storage:{local:{get:async()=>({...state}),set:async value=>Object.assign(state,value),remove:async key=>{delete state[key]}}}},
  fetchWithTimeout:async()=>({ok:true,json:async()=>({state:'success',phase,time:new Date().toISOString()})}),
@@ -17,7 +17,7 @@ function harness({phase='local',owner=false,serviceFail=false}={}){
  runScheduledServiceUpdate:async()=>{calls.push(['service']);await ctx.reconcileUpdateRuntime('main');if(serviceFail)throw Error('service failed')},
  setTimeout:callback=>{callback();return 0},Date,Set};
  vm.createContext(ctx);
- vm.runInContext(fn('reconcileUpdateRuntime','waitForTabReady')+fn('runScheduledUpdate','checkMissedSchedules'),ctx);
+ vm.runInContext(source.slice(source.indexOf('function isCrmAuthenticationFailure('),source.indexOf('async function fetchInCrm('))+fn('reconcileUpdateRuntime','waitForTabReady')+fn('runScheduledUpdate','checkMissedSchedules'),ctx);
  return {ctx,state,calls,active};
 }
 test('watchdog keeps live owner lock during intermediate local success',async()=>{

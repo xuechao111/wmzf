@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const port = Number(process.argv[2] || 9222);
+const port = Number(process.argv[2] || 9223);
 const classFile = process.argv[3] || "../data/classes.json";
 const outFile = process.argv[4] || "../../data/group-lessons-raw.json";
 const startClass = Number(process.argv[5] || 0);
@@ -46,16 +46,20 @@ for(let i=0;i<classes.length;i++){
   const openedWeek=seconds=>Math.floor((Number(seconds)+8*3600-4*86400)/(7*86400));
   const opened=lessons.filter(x=>Number(x.unlock_time||0)>0&&Number(x.unlock_time||0)<=nowSec);
   const weeks=[...new Set(opened.map(x=>openedWeek(x.unlock_time)))].sort((a,b)=>b-a).slice(0,2);
-  const courseIds=opened.filter(x=>weeks.includes(openedWeek(x.unlock_time))).map(x=>x.course_id); const items=[]; const pageSize=500;
+  const courseIds=opened.filter(x=>weeks.includes(openedWeek(x.unlock_time))).map(x=>x.course_id); const items=[]; const pageSize=100;
   for(let offset=0;offset<courseIds.length;offset+=courseChunkSize){
     const ids=courseIds.slice(offset,offset+courseChunkSize); const openCourseList=ids.map(courseId=>({courseId,paramValue:[0,1],isAllSelect:true}));
-    let pageNo=1;
+    let pageNo=1,pairItemCount=0;
     while(true){
       const body={term_id:termId,class_id:classId,course_ids:ids,time_type:1,openCourseList,queryType:2};
       let resp; for(let attempt=1;attempt<=3;attempt++){try{resp=await api(`https://api-codecamp-crm.codemao.cn/annual/class/course-detail?page=${pageNo}&limit=${pageSize}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});break;}catch(e){if(attempt===3)throw e;await new Promise(r=>setTimeout(r,1000*attempt));}}
-      const rows=resp.items||resp.data?.items||[]; items.push(...rows);
+      const rows=resp.items||resp.data?.items||[];
       const total=Number(resp.total??resp.data?.total??rows.length); console.log(`  courses=${offset+1}-${offset+ids.length} page=${pageNo} rows=${rows.length} total=${total}`);
-      if(!rows.length||pageNo*pageSize>=total)break; pageNo++;
+      if(!Array.isArray(rows)||!Number.isFinite(total)||total<0)throw new Error(`CRM_DETAIL_INVALID:${classId}:${pageNo}`);
+      pairItemCount+=rows.length;
+      if(!rows.length&&pairItemCount<total)throw new Error(`CRM_DETAIL_INCOMPLETE:${classId}:${pageNo}:${pairItemCount}/${total}`);
+      items.push(...rows);
+      if(!rows.length||pairItemCount>=total)break; pageNo++;
     }
   }
   const merged=new Map();

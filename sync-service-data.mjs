@@ -3,20 +3,46 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {fileURLToPath} from "node:url";
 
+function isolatedRuntimeRoot(source, fallback, expectedPort){
+  if(String(process.env.HF_DASHBOARD_PORT||expectedPort)!==String(expectedPort))throw new Error("INSTANCE_PORT_MISMATCH");
+  const base=fs.realpathSync(source),candidate=path.resolve(process.env.HF_DASHBOARD_ROOT||fallback);
+  const relative=path.relative(base,candidate);
+  if(relative===".."||relative.startsWith(".."+path.sep)||path.isAbsolute(relative))throw new Error("INSTANCE_ROOT_MISMATCH");
+  let current=candidate;
+  while(true){
+    if(fs.existsSync(current)&&fs.lstatSync(current).isSymbolicLink())throw new Error("INSTANCE_ROOT_REPARSE_POINT");
+    const parent=path.dirname(current);if(parent===current)break;current=parent;
+  }
+  return candidate;
+}
+
+
 const DEFAULT_WORKBOOK="";
-const DASHBOARD_ROOT=process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url));
+const DASHBOARD_ROOT=isolatedRuntimeRoot(path.dirname(fileURLToPath(import.meta.url)),path.join(path.dirname(fileURLToPath(import.meta.url)),"instances","test"),8766);
 const DASHBOARD_CONFIG=path.join(DASHBOARD_ROOT,"dashboard-config.json");
 const TEACHING_TABLES=path.join(DASHBOARD_ROOT,"run-data","group-dashboard-tables.json");
 const MCP_RELAY_DIR=path.join(DASHBOARD_ROOT,"run-data","mcp-relay");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
 const WORKBOOK=DASHBOARD_SETTINGS.serviceWorkbookUrl||DASHBOARD_SETTINGS.workbookUrl||DEFAULT_WORKBOOK;
 const SHEET_NAME="教学服务数据";
-const CREDENTIAL_FILES=[process.env.CODEMAO_SCHOLARSHIP_CREDENTIALS_FILE,"C:/Users/user/Desktop/Documents/编程猫管理skill/codemao-student-profile-extracted/codemao-course-data/sync.py"].filter(Boolean);
 const normalize=value=>String(value??"").replace(/\s+/g," ").trim();
 const csvEscape=value=>{const text=value==null?"":String(value);return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;};
 const matrixToCsv=matrix=>matrix.map(row=>row.map(csvEscape).join(",")).join("\r\n");
 
-function credentials(){if(DASHBOARD_SETTINGS.dingtalkConnectionUrl)return {url:DASHBOARD_SETTINGS.dingtalkConnectionUrl,token:DASHBOARD_SETTINGS.dingtalkAccessKey||""};const file=CREDENTIAL_FILES.find(fs.existsSync);if(!file)throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND");const text=fs.readFileSync(file,"utf8"),url=text.match(/MCP_URL\s*=\s*["']([^"']+)["']/)?.[1],token=text.match(/ACCESS_TOKEN\s*=\s*["']([^"']+)["']/)?.[1];if(!url)throw new Error("DINGTALK_MCP_CONFIG_INVALID");return {url,token:token||""};}
+function configuredServiceGroup(config={}){
+  const title=String(config.displayTitle||"").trim();
+  const group=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
+  if(!group.endsWith("组")||/[\r\n]/.test(group)||group.length>40)throw new Error("请在配置面板的工作台名称填写本组名称，例如：深圳战区 · 致远组");
+  return group;
+}
+function scopeServiceData(data,group){
+  const keep=rows=>(rows||[]).filter(row=>String(row.小组||"").trim()===group);
+  const scoped={...data,groupName:group,teachers:keep(data.teachers),groups:keep(data.groups),today:{...data.today,teachers:keep(data.today?.teachers),groups:keep(data.today?.groups)}};
+  if(data.groupName!==group&&!scoped.teachers.length&&!scoped.today.teachers.length){scoped.updatedAt="";scoped.dates=[];scoped.today.date="";}
+  return scoped;
+}
+
+function credentials(){if(DASHBOARD_SETTINGS.dingtalkConnectionUrl)return {url:DASHBOARD_SETTINGS.dingtalkConnectionUrl,token:DASHBOARD_SETTINGS.dingtalkAccessKey||""};throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND:请在副本配置面板填写独立连接授权");}
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function networkError(error,url,name,attempts){const cause=error?.cause;let host="钉钉连接";try{host=new URL(url).host||host}catch{}const reason=[error?.message,cause?.code,cause?.message].filter(Boolean).join(" / ");return new Error(`DINGTALK_NETWORK_FAILED:${host}:${name}:已重试${attempts}次:${reason||"网络连接失败"}`);}
 async function mcpCallViaBrowserRelay(body,timeoutMs=180000){
@@ -85,13 +111,13 @@ function summarize(table,metricNames,dimension){
   return [...groups.values()].map(item=>{const result={...item,value:item.hasCounts&&item.questions&&!table.countsDerived?item.answered/item.questions*100:average(item.values),answered:item.hasCounts?item.answered:null,questions:item.hasCounts?item.questions:null,imUsers:item.hasUsageCounts?item.imUsers:null,imEligible:item.hasUsageCounts?item.imEligible:null,imUsage:item.hasUsageCounts&&item.imEligible?item.imUsers/item.imEligible*100:average(item.imUsageValues),samples:item.values.filter(x=>x!=null).length};for(const [field,values] of Object.entries(item.extraValues))result[field]=field.endsWith("Count")||field.endsWith("Users")?values.reduce((sum,value)=>sum+value,0):average(values);delete result.values;delete result.imUsageValues;delete result.extraValues;return result;}).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN"));
 }
 
-function buildServiceViews(serviceSource){
+function buildServiceViews(serviceSource,groupName=""){
   if(!serviceSource)return {teachers:[],groups:[]};
   if(Array.isArray(serviceSource.teachers)&&Array.isArray(serviceSource.groups))return {teachers:serviceSource.teachers.filter(item=>item.老师!=="薛超"),groups:serviceSource.groups};
-  const imTeachers=serviceSource.im?.teacher?summarize(serviceSource.im.teacher,["3分钟回复率","pre_teacher_3m_reply_cnt"],"teacher").filter(item=>item.name!=="薛超"):[];
-  const wecomTeachers=serviceSource.wecom?.teacher?summarize(serviceSource.wecom.teacher,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"teacher").filter(item=>item.name!=="薛超"):[];
-  const imGroups=serviceSource.im?.group?summarize(serviceSource.im.group,["3分钟回复率","pre_teacher_3m_reply_cnt"],"group"):[];
-  const wecomGroups=serviceSource.wecom?.group?summarize(serviceSource.wecom.group,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"group"):[];
+  const imTeachers=serviceSource.im?.teacher?summarize(serviceSource.im.teacher,["3分钟回复率","pre_teacher_3m_reply_cnt"],"teacher").filter(item=>item.name!=="薛超"&&(!groupName||item.group===groupName)):[];
+  const wecomTeachers=serviceSource.wecom?.teacher?summarize(serviceSource.wecom.teacher,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"teacher").filter(item=>item.name!=="薛超"&&(!groupName||item.group===groupName)):[];
+  const imGroups=serviceSource.im?.group?summarize(serviceSource.im.group,["3分钟回复率","pre_teacher_3m_reply_cnt"],"group").filter(item=>!groupName||item.name===groupName):[];
+  const wecomGroups=serviceSource.wecom?.group?summarize(serviceSource.wecom.group,["2小时回复率","2h回复率","avg_2hour_reply_rate"],"group").filter(item=>!groupName||item.name===groupName):[];
   const teacherMap=new Map();
   for(const item of imTeachers)teacherMap.set(item.id||item.name,{工号:item.id,老师:item.name,小组:item.group,im:item.value,imAnswered:item.answered,imQuestions:item.questions,imUsers:item.imUsers,imEligibleStudents:item.imEligible,imUsage:item.imUsage,...serviceCallFields(item),wecom:null});
   for(const item of wecomTeachers){const key=item.id||item.name,old=teacherMap.get(key)||{工号:item.id,老师:item.name,小组:item.group,im:null,imAnswered:null,imQuestions:null};old.wecom=item.value;old.wecomAnswered=item.answered;old.wecomQuestions=item.questions;teacherMap.set(key,old);}
@@ -133,14 +159,17 @@ async function writeSheet(matrix,layout){const listing=await mcpCall("get_all_sh
   const verify=await mcpCall("get_range",{nodeId:WORKBOOK,sheetId,range:`A1:J${Math.min(matrix.length,10)}`});if(!JSON.stringify(verify).includes("教学服务数据")||!JSON.stringify(verify).includes("较组均值"))throw new Error("VERIFY_SERVICE_SHEET_FAILED");return sheetId;}
 
 async function main(){const input=process.argv[2],output=process.argv[3];if(!input||!fs.existsSync(input))throw new Error("CRM_SERVICE_INPUT_NOT_FOUND");const source=JSON.parse(fs.readFileSync(input,"utf8").replace(/^\uFEFF/,"")),dates=source.dates||[],requested=source.serviceSelection||{},requestedDates=Array.isArray(requested.dates)?[...new Set(requested.dates.map(value=>String(value||"").trim()).filter(value=>/^\d{4}-\d{2}-\d{2}$/.test(value)))].sort():[],serviceSelection={days:Array.isArray(requested.days)&&requested.days.length?requested.days.map(Number):[5,6,0],dates:requestedDates,dateSource:requestedDates.length?String(requested.dateSource||"explicitDates"):"weekdaySelection",openedWeek:String(requested.openedWeek||""),startHour:Number.isInteger(Number(requested.startHour))?Number(requested.startHour):14,endHour:Number.isInteger(Number(requested.endHour))?Number(requested.endHour):21},serviceTimeLabel=`${String(serviceSelection.startHour).padStart(2,"0")}:00–${String(serviceSelection.endHour).padStart(2,"0")}:00`;
+  const groupName=configuredServiceGroup(DASHBOARD_SETTINGS);
+  if(source.groupName!==groupName)throw new Error("CRM_SERVICE_GROUP_MISMATCH:请刷新副本并重新加载专用连接器后采集本组数据");
   validateServiceSummaryTables(source);
   const debugTable=table=>({chart:table?.chartName,headers:table?.headers,granular:table?.granular,countsDerived:Boolean(table?.countsDerived),resolvedColumns:table?.resolvedColumns||{},availableColumns:table?.availableColumns||[],candidateAttempts:table?.candidateAttempts||[],callDiagnostics:table?.callDiagnostics||null,callValidation:table?.callValidation||null,detailCallDiagnostics:table?.detailCallDiagnostics||null});
   const debugFile=output.replace(/service-data\.json$/,"service-debug.json");fs.writeFileSync(debugFile,JSON.stringify({dates,serviceSelection,todayDates:source.today?.dates||[],todayErrors:source.today?.errors||{},todayError:source.today?.error||null,imTeacher:debugTable(source.im?.teacher),imGroup:debugTable(source.im?.group),wecomTeacher:debugTable(source.wecom?.teacher),wecomGroup:debugTable(source.wecom?.group),todayImTeacher:debugTable(source.today?.im?.teacher),todayWecomTeacher:debugTable(source.today?.wecom?.teacher)},null,2),"utf8");
-  const aggregate=buildServiceViews(source),teachers=aggregate.teachers,groups=aggregate.groups,activeByTeacher=activeStudentCounts();for(const teacher of teachers)teacher.activeStudents=activeByTeacher.get(normalize(teacher.老师))??null;
-  const daily=buildServiceViews(source.today),dailyDate=source.today?.dates?.[0]||"";for(const teacher of daily.teachers)teacher.activeStudents=activeByTeacher.get(normalize(teacher.老师))??null;
+  const aggregate=scopeServiceData(buildServiceViews(source,groupName),groupName),teachers=aggregate.teachers,groups=aggregate.groups,activeByTeacher=activeStudentCounts();for(const teacher of teachers)teacher.activeStudents=activeByTeacher.get(normalize(teacher.老师))??null;
+  const daily=scopeServiceData(buildServiceViews(source.today,groupName),groupName),dailyDate=source.today?.dates?.[0]||"";for(const teacher of daily.teachers)teacher.activeStudents=activeByTeacher.get(normalize(teacher.老师))??null;
+  if(!teachers.length)throw new Error(`CRM_SERVICE_GROUP_EMPTY:${groupName}:未读取到本组老师，原表未修改`);
   const teacherImAverage=average(teachers.map(x=>x.im)),teacherWecomAverage=average(teachers.map(x=>x.wecom)),groupImAverage=average(groups.map(x=>x.im)),groupWecomAverage=average(groups.map(x=>x.wecom));teachers.sort((a,b)=>(composite(b)??-Infinity)-(composite(a)??-Infinity)||a.老师.localeCompare(b.老师,"zh-CN"));groups.sort((a,b)=>(composite(b)??-Infinity)-(composite(a)??-Infinity)||a.小组.localeCompare(b.小组,"zh-CN"));daily.teachers.sort((a,b)=>(composite(b)??-Infinity)-(composite(a)??-Infinity)||a.老师.localeCompare(b.老师,"zh-CN"));daily.groups.sort((a,b)=>(composite(b)??-Infinity)-(composite(a)??-Infinity)||a.小组.localeCompare(b.小组,"zh-CN"));const statuses=teachers.map(x=>teacherStatus(x,teacherImAverage,teacherWecomAverage)),leading=statuses.filter(x=>x==="双项领先").length;
-  const updatedAt=Array.isArray(source.teachers)&&source.updatedAt?String(source.updatedAt):new Date().toLocaleString("sv-SE",{timeZone:"Asia/Shanghai",hour12:false}),period=dates.join("、"),teacherSection=7,teacherHeader=8,teacherStart=9,teacherEnd=teacherStart+teachers.length-1,groupSection=teacherEnd+2,groupHeader=groupSection+1,groupStart=groupHeader+1,groupEnd=groupStart+groups.length-1;const matrix=[["教学服务数据对比看板",`数据更新时间：${updatedAt}`],["统计日期",period,"统计时段",serviceTimeLabel,"说明","空值不计入均值"],[],["老师人数","IM 3分钟平均","企微2小时平均","双项领先人数","IM最高","企微最高"],[teachers.length,rate(teacherImAverage),rate(teacherWecomAverage),leading,rate(Math.max(...teachers.map(x=>x.im).filter(Number.isFinite))),rate(Math.max(...teachers.map(x=>x.wecom).filter(Number.isFinite)))],[],["屹柯组老师对比 · 按双指标均值降序"],["排名","老师工号","老师姓名","小组","IM 3分钟回复率","较组均值","企微2小时回复率","较组均值","双指标均值","表现"],...teachers.map((x,index)=>[index+1,x.工号,x.老师,x.小组,rate(x.im),delta(x.im,teacherImAverage),rate(x.wecom),delta(x.wecom,teacherWecomAverage),rate(composite(x)),statuses[index]]),[],["AI C++教学部小组对比 · 按双指标均值降序"],["排名","小组","IM 3分钟回复率","较部门均值","企微2小时回复率","较部门均值","双指标均值"],...groups.map((x,index)=>[index+1,x.小组,rate(x.im),delta(x.im,groupImAverage),rate(x.wecom),delta(x.wecom,groupWecomAverage),rate(composite(x))])];
-  const layout={teacherSection,teacherHeader,teacherStart,teacherEnd,groupSection,groupHeader,groupStart,groupEnd,teacherStatuses:statuses},sheetId=await writeSheet(matrix,layout),dashboard={updatedAt,dates,serviceSelection,callValidation:source.im?.teacher?.callValidation||null,teachers,groups,today:{date:dailyDate,callValidation:source.today?.im?.teacher?.callValidation||null,teachers:daily.teachers,groups:daily.groups,status:source.today?.status||null,errors:source.today?.errors||{},error:source.today?.error||null},sheetId};fs.writeFileSync(output,JSON.stringify(dashboard,null,2),"utf8");console.log(`SERVICE_OK teachers=${teachers.length} groups=${groups.length} todayTeachers=${daily.teachers.length} sheet=${sheetId} updated=${updatedAt}`);
+  const updatedAt=Array.isArray(source.teachers)&&source.updatedAt?String(source.updatedAt):new Date().toLocaleString("sv-SE",{timeZone:"Asia/Shanghai",hour12:false}),period=dates.join("、"),teacherSection=7,teacherHeader=8,teacherStart=9,teacherEnd=teacherStart+teachers.length-1,groupSection=teacherEnd+2,groupHeader=groupSection+1,groupStart=groupHeader+1,groupEnd=groupStart+groups.length-1;const matrix=[["教学服务数据对比看板",`数据更新时间：${updatedAt}`],["统计日期",period,"统计时段",serviceTimeLabel,"说明","空值不计入均值"],[],["老师人数","IM 3分钟平均","企微2小时平均","双项领先人数","IM最高","企微最高"],[teachers.length,rate(teacherImAverage),rate(teacherWecomAverage),leading,rate(Math.max(...teachers.map(x=>x.im).filter(Number.isFinite))),rate(Math.max(...teachers.map(x=>x.wecom).filter(Number.isFinite)))],[],[`${groupName}老师对比 · 按双指标均值降序`],["排名","老师工号","老师姓名","小组","IM 3分钟回复率","较组均值","企微2小时回复率","较组均值","双指标均值","表现"],...teachers.map((x,index)=>[index+1,x.工号,x.老师,x.小组,rate(x.im),delta(x.im,teacherImAverage),rate(x.wecom),delta(x.wecom,teacherWecomAverage),rate(composite(x)),statuses[index]]),[],["AI C++教学部小组对比 · 按双指标均值降序"],["排名","小组","IM 3分钟回复率","较部门均值","企微2小时回复率","较部门均值","双指标均值"],...groups.map((x,index)=>[index+1,x.小组,rate(x.im),delta(x.im,groupImAverage),rate(x.wecom),delta(x.wecom,groupWecomAverage),rate(composite(x))])];
+  const layout={teacherSection,teacherHeader,teacherStart,teacherEnd,groupSection,groupHeader,groupStart,groupEnd,teacherStatuses:statuses},sheetId=await writeSheet(matrix,layout),dashboard={updatedAt,groupName,dates,serviceSelection,callValidation:source.im?.teacher?.callValidation||null,teachers,groups,today:{date:dailyDate,callValidation:source.today?.im?.teacher?.callValidation||null,teachers:daily.teachers,groups:daily.groups,status:source.today?.status||null,errors:source.today?.errors||{},error:source.today?.error||null},sheetId};fs.writeFileSync(output,JSON.stringify(dashboard,null,2),"utf8");console.log(`SERVICE_OK teachers=${teachers.length} groups=${groups.length} todayTeachers=${daily.teachers.length} sheet=${sheetId} updated=${updatedAt}`);
 }
-export {summarize,buildServiceViews,validateServiceSummaryTables,decodeMcpResult};
+export {configuredServiceGroup,scopeServiceData,summarize,buildServiceViews,validateServiceSummaryTables,decodeMcpResult};
 if(process.argv[1]&&path.resolve(process.argv[1])===path.resolve(fileURLToPath(import.meta.url)))main().catch(error=>{console.error(String(error?.message||error));process.exitCode=1;});

@@ -51,6 +51,7 @@ def build_weekly_attendance_table(snapshot, excluded=()):
             has_live_data = bool(metrics.get("liveExpected") or expected or attend or metrics.get("liveAttend"))
             if has_live_data and (not expected or not attend.issubset(expected)):
                 raise ValueError(f"WEEKLY_ATTENDANCE_ROSTER_INVALID:{item['classId']}:{period}")
+            record["unverified"] |= bool(metrics.get("livePending") or metrics.get("missingLiveBoards") or metrics.get("detailLiveFallbacks"))
             if has_live_data:
                 record["has_live_data"] = True
                 record["expected"].update(expected)
@@ -82,7 +83,10 @@ def build_weekly_attendance_table(snapshot, excluded=()):
             if not record:
                 row.extend([expected, None, None, None, None, None, None, None])
                 continue
-            if record["unverified"] or not record.get("has_live_data"):
+            if record["unverified"]:
+                row.extend([expected, None, None, *["待更新"] * 5])
+                continue
+            if not record.get("has_live_data"):
                 row.extend([expected, None, None, None, None, None, None, None])
                 continue
             attend = len(record["attend"] & group["students"])
@@ -101,6 +105,9 @@ def build_weekly_attendance_table(snapshot, excluded=()):
         for week_index in range(len(weeks)):
             offset = 5 + week_index * len(METRICS)
             expected = sum((rows[i][offset] or 0) for i in indexes)
+            if any(rows[i][offset + 3] == "待更新" for i in indexes):
+                summary.extend([expected, None, None, *["待更新"] * 5])
+                continue
             attend_values = [rows[i][offset + 3] for i in indexes if rows[i][offset + 3] is not None]
             replay_values = [rows[i][offset + 5] for i in indexes if rows[i][offset + 5] is not None]
             attend = sum(attend_values) if attend_values else None

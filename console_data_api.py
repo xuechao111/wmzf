@@ -5,7 +5,8 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
+from runtime_paths import runtime_root
+ROOT = runtime_root()
 GROUP = ROOT / "run-data" / "group-dashboard-tables.json"
 EXCEPTION = ROOT / "run-data" / "exception-export-tables.json"
 SNAPSHOT = ROOT / "dashboard-snapshot.json"
@@ -108,7 +109,10 @@ def prepare_table(name: str, table: dict, snapshot: dict) -> dict:
         keep = [index for index, column in enumerate(columns) if column not in hidden]
         columns = [columns[index] for index in keep]
         rows = [[row[index] if index < len(row) else "" for index in keep] for row in rows]
-    return {"columns": columns, "data": rows}
+    from live_pending import apply_live_pending
+    prepared = {"columns": columns, "data": rows}
+    apply_live_pending({name: prepared}, snapshot)
+    return prepared
 
 
 

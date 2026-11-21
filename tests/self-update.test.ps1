@@ -14,7 +14,7 @@ function New-Fixture([string]$name) {
  Put (Join-Path $runtime 'dashboard-config.json') '{"group":"replica-group","secret":"private-instance"}'
  Put (Join-Path $install 'REPLICA.md') 'port 8766 only'
  Put (Join-Path $runtime 'scholarship-status.json') '{"state":"success","month":"2027-02"}'
- $manifest=[ordered]@{version='fixture';files=@($files|ForEach-Object{[ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $package $_)).Hash}})}
+ $manifest=[ordered]@{version='fixture';instance='replica';port=8766;files=@($files|ForEach-Object{[ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $package $_)).Hash}})}
  Put (Join-Path $package 'release-manifest.json') ($manifest|ConvertTo-Json -Depth 6)
  return @{package=$package;install=$install;runtime=$runtime;manifest=$manifest}
 }
@@ -23,6 +23,11 @@ function Run-Fixture($f) {
  return $LASTEXITCODE
 }
 try {
+ $f=New-Fixture 'wrong-instance';$f.manifest.instance='main';$f.manifest.port=8765
+ Put (Join-Path $f.package 'release-manifest.json') ($f.manifest|ConvertTo-Json -Depth 6)
+ Assert ((Run-Fixture $f) -eq 1) 'Main release must never install into replica'
+ Assert ([IO.File]::ReadAllText((Join-Path $f.install 'bridge.ps1')) -eq 'old source') 'Wrong instance changed source'
+ Write-Output 'PASS main release cannot overwrite replica'
  $f=New-Fixture 'success';Assert ((Run-Fixture $f) -eq 0) 'Valid release must install'
  Assert ([IO.File]::ReadAllText((Join-Path $f.install 'index.html')) -eq 'new source') 'Source did not update'
  Assert ([IO.File]::ReadAllText((Join-Path $f.install 'dashboard-config.json')) -eq '{"secret":"private-main"}') 'Main config changed'
@@ -45,6 +50,18 @@ try {
  Assert ((Run-Fixture $f) -eq 1) 'Running data update must block installation'
  Assert ([IO.File]::ReadAllText((Join-Path $f.install 'bridge.ps1')) -eq 'old source') 'Busy failure changed source'
  Write-Output 'PASS active data update blocks software installation'
+ $f=New-Fixture 'stale-crm';Put (Join-Path $f.runtime 'status.json') '{"state":"running","phase":"crm","message":"old","time":"2020-01-01 00:00:00","lastSuccessTime":"original"}'
+ (Get-Item -LiteralPath (Join-Path $f.runtime 'status.json')).LastWriteTime=(Get-Date).AddHours(-2)
+ Assert ((Run-Fixture $f) -eq 0) 'Stale unlocked CRM preparation must allow repair'
+ Assert (@(Get-ChildItem $f.runtime -Filter 'status.json.interrupted-*.bak').Count -eq 1) 'Stale preparation evidence must be backed up'
+ Assert ((Get-Content (Join-Path $f.runtime 'status.json') -Raw | ConvertFrom-Json).lastSuccessTime -eq 'original') 'Stale recovery changed last successful time'
+ Write-Output 'PASS stale unlocked CRM preparation recovers without table writes'
+ $f=New-Fixture 'stale-crm-live-lock';Put (Join-Path $f.runtime 'status.json') '{"state":"running","phase":"crm"}'
+ (Get-Item -LiteralPath (Join-Path $f.runtime 'status.json')).LastWriteTime=(Get-Date).AddHours(-2)
+ $held=[IO.File]::Open((Join-Path $f.runtime 'update.lock'),'OpenOrCreate','ReadWrite','None')
+ try{Assert ((Run-Fixture $f) -eq 1) 'Live worker lock must block stale CRM recovery'}finally{$held.Dispose()}
+ Assert ([IO.File]::ReadAllText((Join-Path $f.install 'bridge.ps1')) -eq 'old source') 'Live worker installation changed source'
+ Write-Output 'PASS stale CRM status with live worker lock remains protected'
  $f=New-Fixture 'overlap';$held=[IO.File]::Open((Join-Path $f.runtime 'self-update.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
  try{Assert ((Run-Fixture $f) -eq 2) 'Concurrent updater must skip'}finally{$held.Dispose()}
  Write-Output 'PASS overlapping updater rejected'

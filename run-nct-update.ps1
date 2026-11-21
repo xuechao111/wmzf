@@ -1,6 +1,10 @@
 ﻿param([Parameter(Mandatory=$true)][string]$InputFile)
 $ErrorActionPreference='Stop'
-$sourceRoot=Split-Path -Parent $MyInvocation.MyCommand.Path;$root=$env:HF_DASHBOARD_ROOT;if([string]::IsNullOrWhiteSpace($root)){$root=$sourceRoot}
+$sourceRoot=Split-Path -Parent $MyInvocation.MyCommand.Path;$root=$env:HF_DASHBOARD_ROOT;if([string]::IsNullOrWhiteSpace($root)){$root=if(Test-Path (Join-Path $sourceRoot 'dashboard-config.json')){$sourceRoot}else{Join-Path $sourceRoot 'instances/test'}}
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $sourceRoot $root $(if($env:HF_DASHBOARD_PORT){[int]$env:HF_DASHBOARD_PORT}else{8766}) 8766
+$env:HF_DASHBOARD_ROOT=$root
+$env:HF_DASHBOARD_PORT='8766'
 $statusFile=Join-Path $root 'nct-status.json';$lockFile=Join-Path $root 'nct-update.lock';$portableNode=Join-Path $sourceRoot 'runtime\node\node.exe';$node=if(Test-Path -LiteralPath $portableNode){$portableNode}else{(Get-Command node -ErrorAction SilentlyContinue).Source};if([string]::IsNullOrWhiteSpace($node)){$node='C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'}
 $script=Join-Path $sourceRoot 'sync-nct-table.mjs';$startedAt=Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 function Write-NctStatus($state,$message,$detail=''){$payload=[ordered]@{state=[string]$state;message=[string]$message;detail=[string]$detail;time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt=$startedAt}|ConvertTo-Json -Compress;[IO.File]::WriteAllText($statusFile,$payload,[Text.UTF8Encoding]::new($false))}

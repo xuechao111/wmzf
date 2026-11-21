@@ -12,7 +12,8 @@ from PIL import Image, ImageDraw, ImageFont
 from broadcast_scope import group_rows
 
 SOURCE_ROOT = Path(__file__).resolve().parent
-ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or SOURCE_ROOT / "instances" / "test")
+from runtime_paths import runtime_root
+ROOT = runtime_root()
 OUT = ROOT / 'run-data' / 'group-broadcast-colored'
 THRESHOLD = 0.03
 

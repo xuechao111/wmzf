@@ -3,8 +3,22 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {randomUUID} from "node:crypto";
 
+function isolatedRuntimeRoot(source, fallback, expectedPort){
+  if(String(process.env.HF_DASHBOARD_PORT||expectedPort)!==String(expectedPort))throw new Error("INSTANCE_PORT_MISMATCH");
+  const base=fs.realpathSync(source),candidate=path.resolve(process.env.HF_DASHBOARD_ROOT||fallback);
+  const relative=path.relative(base,candidate);
+  if(relative===".."||relative.startsWith(".."+path.sep)||path.isAbsolute(relative))throw new Error("INSTANCE_ROOT_MISMATCH");
+  let current=candidate;
+  while(true){
+    if(fs.existsSync(current)&&fs.lstatSync(current).isSymbolicLink())throw new Error("INSTANCE_ROOT_REPARSE_POINT");
+    const parent=path.dirname(current);if(parent===current)break;current=parent;
+  }
+  return candidate;
+}
+
+
 const SOURCE_ROOT=path.dirname(fileURLToPath(import.meta.url));
-const RUNTIME_ROOT=path.resolve(process.env.HF_DASHBOARD_ROOT||path.join(SOURCE_ROOT,"instances","test"));
+const RUNTIME_ROOT=isolatedRuntimeRoot(SOURCE_ROOT,path.join(SOURCE_ROOT,"instances","test"),8766);
 const DASHBOARD_CONFIG=path.join(RUNTIME_ROOT,"dashboard-config.json");
 const DASHBOARD_SETTINGS=(()=>{try{return JSON.parse(fs.readFileSync(DASHBOARD_CONFIG,"utf8"))}catch{return {}}})();
 const WORKBOOK = normalizeWorkbookUrl(DASHBOARD_SETTINGS.renewalWorkbookUrl || "");
@@ -14,12 +28,32 @@ const TARGET_END_COLUMN = "AM";
 const EXPECTED_COLUMN_COUNT = 39;
 const FILTERS = {"续费月份":"","续费节点":"首续","战队":"深圳战区"};
 const REQUIRED_COLUMNS = ["续费月份","用户ID","用户姓名","战区","战队","续费节点"];
-const CREDENTIAL_FILES = [
-  process.env.CODEMAO_SCHOLARSHIP_CREDENTIALS_FILE,
-].filter(Boolean);
 
 function normalizeText(value) {
   return String(value ?? "").replace(/\s+/g," ").trim();
+}
+
+function normalizeSourceHeaders(source) {
+  if (!Array.isArray(source.headers) || !Array.isArray(source.rows)) throw new Error("CRM_INPUT_INVALID");
+  source.headers=source.headers.map(normalizeText);
+  const duplicates=source.headers.filter((header,index,headers)=>headers.indexOf(header)!==index);
+  if (!source.headers.length || source.headers.some(header=>!header) || duplicates.length) {
+    throw new Error(`CRM_HEADERS_INVALID:空表头或重复列:${[...new Set(duplicates)].join("|")}`);
+  }
+  // Source schemas can grow independently of the authorized workbook. The
+  // target's existing header names remain authoritative for writing columns.
+  return source;
+}
+
+function projectTargetRows(source,targetHeaders) {
+  const missing=targetHeaders.filter(header=>!source.headers.includes(header));
+  if (missing.length) {
+    const error=new Error(`CRM_MISSING_TARGET_COLUMNS:${missing.join("|")}`);
+    // Schema only: never include learner rows, document URLs or credentials.
+    error.schema={sourceHeaders:source.headers,targetHeaders,missingTargetHeaders:missing};
+    throw error;
+  }
+  return source.rows.map(row=>Object.fromEntries(targetHeaders.map(header=>[header,row[header] ?? ""])));
 }
 
 function normalizeWorkbookUrl(value) {
@@ -75,18 +109,13 @@ function readMcpCredentials() {
   if (DASHBOARD_SETTINGS.dingtalkConnectionUrl) {
     return {url:DASHBOARD_SETTINGS.dingtalkConnectionUrl,token:DASHBOARD_SETTINGS.dingtalkAccessKey || ""};
   }
-  const file = CREDENTIAL_FILES.find(candidate => fs.existsSync(candidate));
-  if (!file) throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND");
-  const text = fs.readFileSync(file,"utf8");
-  const url = text.match(/MCP_URL\s*=\s*["']([^"']+)["']/)?.[1];
-  const token = text.match(/ACCESS_TOKEN\s*=\s*["']([^"']+)["']/)?.[1];
-  if (!url) throw new Error("DINGTALK_MCP_CONFIG_INVALID");
-  return {url,token:token || ""};
+  throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND:请在副本配置面板填写独立连接授权");
 }
 
 async function mcpRelayEnvelope(credentials,body,timeoutMs) {
   // Never infer the main instance from a missing environment variable.
   const port=String(process.env.HF_DASHBOARD_PORT||"8766");
+  if(port!=="8766")throw new Error("DINGTALK_RELAY_INSTANCE_MISMATCH");
   if(!/^876[56]$/.test(port))throw new Error("DINGTALK_RELAY_INSTANCE_PORT_INVALID");
   const controller=new AbortController();
   const healthTimer=setTimeout(()=>controller.abort(),4000);
@@ -166,13 +195,11 @@ async function writeAndVerify(source) {
   if (!targetHeaders.some(Boolean)) {
     const info=await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId});
     if (info.nonEmptyRange || Number(info.lastNonEmptyRow)>=0) throw new Error("DINGTALK_HEADER_EMPTY_WITH_EXISTING_DATA");
-    targetHeaders=[...source.headers];
+    targetHeaders=source.headers.filter(header=>header!=="is_page_get_coupon");
   }
   if (targetHeaders.length !== EXPECTED_COLUMN_COUNT || targetHeaders.some(header => !header)) throw new Error(`DINGTALK_HEADER_INVALID:${targetHeaders.length}`);
   if (new Set(targetHeaders).size!==targetHeaders.length) throw new Error("DINGTALK_HEADER_DUPLICATED");
-  const missing = targetHeaders.filter(header => !source.headers.includes(header));
-  if (missing.length) throw new Error(`CRM_MISSING_TARGET_COLUMNS:${missing.join("|")}`);
-  const tableRows = source.rows.map(row => Object.fromEntries(targetHeaders.map(header => [header,row[header] ?? ""])));
+  const tableRows = projectTargetRows(source,targetHeaders);
   validateSource(targetHeaders,tableRows);
   const infoBefore = await mcpCall("get_sheet",{nodeId:WORKBOOK,sheetId});
   const previousLastRow = Number(infoBefore.nonEmptyRange?.lastRow || (Number(infoBefore.lastNonEmptyRow)+1) || 1);
@@ -245,8 +272,7 @@ async function main() {
   const selectedMonth=String(source.renewalMonth||"");
   if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(selectedMonth)) throw new Error("CRM_RENEWAL_MONTH_INVALID");
   FILTERS["续费月份"]=selectedMonth;
-  source.headers=source.headers.map(normalizeText);
-  if(source.headers.length!==EXPECTED_COLUMN_COUNT || source.headers.some(header=>!header) || new Set(source.headers).size!==source.headers.length)throw new Error("CRM_HEADERS_INVALID");
+  normalizeSourceHeaders(source);
   if(source.rowcount!=null && Number(source.rowcount)!==source.rows.length)throw new Error("CRM_ROW_COUNT_MISMATCH");
   validateSource(source.headers,source.rows);
   console.log(`CRM_OK rows=${source.rows.length} columns=${source.headers.length}`);
@@ -279,6 +305,10 @@ const task=process.argv.includes("--self-test") ? Promise.resolve().then(selfTes
   ? updateDashboardTimestamp().then(timestamp=>console.log(`DASHBOARD_TIMESTAMP_OK time=${timestamp}`))
   : main();
 task.catch(error=>{
-  console.error(String(error?.message||error));
+  const message=String(error?.message||error);
+  try {
+    fs.writeFileSync(path.join(RUNTIME_ROOT,"renewal-error.json"),JSON.stringify({time:new Date().toISOString(),message,...(error.schema?{schema:error.schema}:{})}),"utf8");
+  } catch {}
+  console.error(message);
   process.exitCode=1;
 });

@@ -8,7 +8,8 @@ from pathlib import Path
 
 import run_dashboard_update as core
 
-ROOT = Path(os.environ.get("HF_DASHBOARD_ROOT") or Path(__file__).resolve().parent)
+from runtime_paths import runtime_root
+ROOT = runtime_root()
 OUT = ROOT / "dashboard-snapshot.json"
 RAW = ROOT / "run-data" / "group-lessons-raw.json"
 SERVICE = ROOT / "service-data.json"
@@ -126,13 +127,15 @@ def public_metrics(metrics, roster, include_lists=True):
     replay = sorted(metrics["replayIds"], key=lambda uid: roster.get(uid, ""))
     live_expected = sorted(metrics["liveExpectedIds"], key=lambda uid: roster.get(uid, ""))
     live_attend = sorted(metrics["liveAttendIds"], key=lambda uid: roster.get(uid, ""))
+    live_pending = bool(metrics.get("missingLiveBoards") or metrics.get("detailLiveFallbacks"))
     result = {
+        "livePending": live_pending,
         "arrivalExpected": metrics["arrivalExpected"], "arrivalAttend": metrics["arrivalAttend"],
         "arrivalRate": pct(metrics["arrivalAttend"], metrics["arrivalExpected"]),
         "liveExpected": metrics["liveExpected"], "liveAttend": metrics["liveAttend"],
-        "liveRate": pct(metrics["liveAttend"], metrics["liveExpected"]),
+        "liveRate": None if live_pending else pct(metrics["liveAttend"], metrics["liveExpected"]),
         "liveAbsentStudents": len(absent), "replayAttend": metrics["replayAttend"],
-        "replayRate": pct(metrics["replayAttend"], metrics["liveExpected"]),
+        "replayRate": None if live_pending else pct(metrics["replayAttend"], metrics["liveExpected"]),
         "replayStudents": len(replay), "evenExpected": metrics["evenExpected"],
         "evenDone": metrics["evenDone"], "finishRate": pct(metrics["evenDone"], metrics["evenExpected"]),
         "incompleteStudents": len(incomplete), "arrivedIncomplete": metrics["arrivedIncomplete"],
@@ -160,8 +163,9 @@ def timely_live_comparison(class_rows):
     """
     slot_order = {"周五晚": 0, "周六午": 1, "周六晚": 2}
     grouped = {}
+    live_pending = any(row.get(period, {}).get("livePending") or row.get(period, {}).get("missingLiveBoards") or row.get(period, {}).get("detailLiveFallbacks") for row in class_rows for period in ("current", "previous"))
     for row in class_rows:
-        if row["current"]["liveExpected"] <= 0 or row["current"].get("detailLiveFallbacks") or row["previous"].get("detailLiveFallbacks"):
+        if row["current"]["liveExpected"] <= 0 or any(row[period].get("livePending") or row[period].get("missingLiveBoards") or row[period].get("detailLiveFallbacks") for period in ("current", "previous")):
             continue
         grouped.setdefault(row["slot"], []).append(row)
 
@@ -192,7 +196,7 @@ def timely_live_comparison(class_rows):
         label = "三时段合计"
     else:
         label = f"{count}时段合计" if count else "暂无已开课时段"
-    has_baseline = bool(slots) and all(item["hasBaseline"] for item in slots)
+    has_baseline = not live_pending and bool(slots) and all(item["hasBaseline"] for item in slots)
     current_expected = sum(
         row["current"]["liveExpected"]
         for rows in grouped.values()
@@ -213,7 +217,7 @@ def timely_live_comparison(class_rows):
         for rows in grouped.values()
         for row in rows
     )
-    current_average = pct(current_attend, current_expected) if current_expected else None
+    current_average = pct(current_attend, current_expected) if current_expected and not live_pending else None
     previous_average = pct(previous_attend, previous_expected) if has_baseline else None
     def student_map(key, period):
         return {
@@ -238,6 +242,7 @@ def timely_live_comparison(class_rows):
             key=lambda student: (student.get("name") or "", student["id"]),
         )
     return {
+        "livePending": live_pending,
         "label": label,
         "slotCount": count,
         "slots": slots,
@@ -443,6 +448,36 @@ def eligible_block(block, now):
     )
 
 
+def cohort_teaching_weeks(blocks, now):
+    """Use populated paired lessons, separately by curriculum and cohort start."""
+    opened_weeks = set()
+    cohort_opened_weeks = {}
+    for block in blocks:
+        if not eligible_block(block, now):
+            continue
+        unlocks = [int(lesson.get("unlock_time") or 0) for lesson in block.get("lessons", []) if int(lesson.get("unlock_time") or 0) > 0]
+        cohort_start = week_start(min(unlocks))
+        # Keep the latest opened week independently for every cohort.  A
+        # single group-wide week made completed cohorts appear as zero data.
+        populated_course_ids = {int(item.get("course_id") or 0) for item in block.get("items", []) if int(item.get("course_id") or 0) > 0}
+        block_weeks = {
+            week_start(int(second.get("unlock_time") or 0))
+            for _first, second in lesson_pairs(block)
+            if 0 < int(second.get("unlock_time") or 0) <= now
+            and int(second.get("course_id") or 0) in populated_course_ids
+        }
+        if not block_weeks:
+            block_weeks = {
+                week_start(int(lesson.get("unlock_time") or 0))
+                for _first, lesson in lesson_pairs(block)
+                if 0 < int(lesson.get("unlock_time") or 0) <= now
+                and int(lesson.get("course_id") or 0) in populated_course_ids
+            }
+        opened_weeks.update(block_weeks)
+        cohort_opened_weeks.setdefault((course_package(block), cohort_start), set()).update(block_weeks)
+    return cohort_opened_weeks
+
+
 def workbook_teacher_groups():
     try:
         metadata = json.loads((ROOT / "run-data/class-group-metadata.json").read_text(encoding="utf-8"))
@@ -474,32 +509,8 @@ def main():
     today_start = int(today.timestamp())
     tomorrow_start = int((today + timedelta(days=1)).timestamp())
     today_label = today.strftime("%Y-%m-%d")
-    opened_weeks = set()
-    cohort_opened_weeks = {}
-    for block in iter_json_array(RAW):
-        if not eligible_block(block, now):
-            continue
-        unlocks = [int(lesson.get("unlock_time") or 0) for lesson in block.get("lessons", []) if int(lesson.get("unlock_time") or 0) > 0]
-        cohort_start = week_start(min(unlocks))
-        # Keep the latest opened week independently for every cohort.  A
-        # single group-wide week made completed cohorts appear as zero data.
-        populated_course_ids = {int(item.get("course_id") or 0) for item in block.get("items", []) if int(item.get("course_id") or 0) > 0}
-        block_weeks = {
-            week_start(int(second.get("unlock_time") or 0))
-            for _first, second in lesson_pairs(block)
-            if 0 < int(second.get("unlock_time") or 0) <= now
-            and int(second.get("course_id") or 0) in populated_course_ids
-        }
-        if not block_weeks:
-            block_weeks = {
-                week_start(int(lesson.get("unlock_time") or 0))
-                for _first, lesson in lesson_pairs(block)
-                if 0 < int(lesson.get("unlock_time") or 0) <= now
-                and int(lesson.get("course_id") or 0) in populated_course_ids
-            }
-        opened_weeks.update(block_weeks)
-        cohort_opened_weeks.setdefault((course_package(block), cohort_start), set()).update(block_weeks)
-    opened_weeks = sorted(opened_weeks)
+    cohort_opened_weeks = cohort_teaching_weeks(iter_json_array(RAW), now)
+    opened_weeks = sorted({week for weeks in cohort_opened_weeks.values() for week in weeks})
     if not opened_weeks:
         raise RuntimeError("CRM 数据中没有已开课课程")
     current_start = max(opened_weeks)
@@ -562,8 +573,8 @@ def main():
         class_row = {"classId": int(block.get("classId") or info.get("classId") or 0), "className": str(info.get("className") or ""), "teacher": teacher, "coursePackage": package, "cohortDate": cohort_date, "cohort": cohort, "slot": slot_label(first_time), "recentClassTime": datetime.fromtimestamp(recent_time, CN).strftime("%Y-%m-%d %H:%M"),
                      "students": [{"id": uid, "name": name} for uid, name in sorted(roster.items(), key=lambda x: x[1])],
                      "current": class_current, "previous": class_previous,
-                     "liveDelta": class_current["liveRate"] - class_previous["liveRate"] if class_previous["liveExpected"] else None,
-                     "replayDelta": class_current["replayRate"] - class_previous["replayRate"],
+                     "liveDelta": class_current["liveRate"] - class_previous["liveRate"] if class_previous["liveExpected"] and not (class_current["livePending"] or class_previous["livePending"]) else None,
+                     "replayDelta": class_current["replayRate"] - class_previous["replayRate"] if not (class_current["livePending"] or class_previous["livePending"]) else None,
                      "finishDelta": class_current["finishRate"] - class_previous["finishRate"]}
         class_row["currentWeek"] = datetime.fromtimestamp(block_current_start, CN).strftime("%Y-%m-%d")
         weekly_row = {key: class_row[key] for key in ("classId", "teacher", "coursePackage", "cohort", "slot", "students")}
@@ -575,6 +586,8 @@ def main():
         # Use the latest collected lesson's learner details for this class.
         from audit_weekly_rosters import latest_class_roster
         roster_course_id, active_roster = latest_class_roster(block)
+        if not active_roster:
+            roster_course_id, active_roster = 0, roster
         weekly_row["students"] = [{"id": uid, "name": name} for uid, name in sorted(active_roster.items())]
         weekly_row["rosterSource"] = "latest-course-detail"
         weekly_row["rosterCourseId"] = roster_course_id
@@ -640,7 +653,7 @@ def main():
         row["previousWeek"] = datetime.fromtimestamp(t["previousStart"], CN).strftime("%Y-%m-%d周")
         row["timelyLiveComparison"] = timely_live_comparison(teacher_classes)
         row["liveDelta"] = row["timelyLiveComparison"]["gap"]
-        row["replayDelta"] = row["current"]["replayRate"] - row["previous"]["replayRate"]
+        row["replayDelta"] = row["current"]["replayRate"] - row["previous"]["replayRate"] if not (row["current"]["livePending"] or row["previous"]["livePending"]) else None
         row["finishDelta"] = row["current"]["finishRate"] - row["previous"]["finishRate"]
         makeup_students = daily_makeup_students(daily_makeup_records.get((t["cohort"], t["teacher"]), []))
         row["dailyMakeup"] = {"date": today_label, "count": len(makeup_students), "students": makeup_students}
@@ -668,14 +681,12 @@ def main():
             "updatedAt": service_updated_at,
         }
         rows.append(row)
-    missing_live = [f"{item['cohort']} {item['teacher']}" for item in rows if item["current"].get("missingLiveBoards")]
-    if missing_live:
-        raise RuntimeError("CRM直播房间数据不完整，已保留上一轮正确看板：" + "、".join(missing_live))
-    rows.sort(key=lambda x: (x["cohort"], -x["current"]["finishRate"], -x["current"]["liveRate"], x["teacher"]))
+    # Missing live rooms affect live metrics only; independent course data is valid.
+    rows.sort(key=lambda x: (x["cohort"], -x["current"]["finishRate"], -(x["current"]["liveRate"] or 0), x["teacher"]))
     by_cohort = {}
     for row in rows: by_cohort.setdefault(row["cohort"], []).append(row)
     for peers in by_cohort.values():
-        verified_peers = [x for x in peers if not x["current"].get("detailLiveFallbacks") and not x["current"].get("missingLiveBoards") and x["current"]["liveExpected"] > 0]
+        verified_peers = [x for x in peers if not x["current"].get("livePending") and not x["current"].get("missingLiveBoards") and x["current"]["liveExpected"] > 0]
         live_avg = sum(x["current"]["liveRate"] for x in verified_peers) / len(verified_peers) if verified_peers else None
         finish_avg = sum(x["current"]["finishRate"] for x in peers) / len(peers)
         for row in peers:
@@ -745,7 +756,7 @@ def main():
     }
     cohort_week_labels = {package + " · " + datetime.fromtimestamp(start, CN).strftime("%Y-%m-%d周"): datetime.fromtimestamp(max(weeks), CN).strftime("%Y-%m-%d周") for (package, start), weeks in cohort_opened_weeks.items() if weeks}
     snapshot = {"updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "serviceUpdatedAt": service_updated_at, "weeks": labels, "weeklyAttendanceWeeks": [datetime.fromtimestamp(weekly_previous_start, CN).strftime("%Y-%m-%d"), datetime.fromtimestamp(weekly_current_start, CN).strftime("%Y-%m-%d")], "cohortWeeks": cohort_week_labels, "cohorts": sorted(by_cohort), "rows": rows, "classes": classes, "weeklyAttendanceClasses": weekly_classes,
-                "summary": {"teachers": len(rows), "classes": len(classes), "arrivalRate": pct(sum(x["current"]["arrivalAttend"] for x in rows), arrival_expected), "liveRate": pct(sum(x["current"]["liveAttend"] for x in rows if not x["current"].get("detailLiveFallbacks")), sum(x["current"]["liveExpected"] for x in rows if not x["current"].get("detailLiveFallbacks"))), "liveUnverifiedTeachers": sorted({x["teacher"] for x in rows if x["current"].get("detailLiveFallbacks")}), "replayRate": pct(sum(x["current"]["replayAttend"] for x in rows), live_expected), "finishRate": pct(sum(x["current"]["evenDone"] for x in rows), even_expected)},
+                "summary": {"teachers": len(rows), "classes": len(classes), "arrivalRate": pct(sum(x["current"]["arrivalAttend"] for x in rows), arrival_expected), "liveRate": pct(sum(x["current"]["liveAttend"] for x in rows if not x["current"].get("livePending")), sum(x["current"]["liveExpected"] for x in rows if not x["current"].get("livePending"))), "liveUnverifiedTeachers": sorted({x["teacher"] for x in rows if x["current"].get("livePending")}), "replayRate": pct(sum(x["current"]["replayAttend"] for x in rows), live_expected), "finishRate": pct(sum(x["current"]["evenDone"] for x in rows), even_expected)},
                 "groupDaily": group_daily}
     OUT.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
 

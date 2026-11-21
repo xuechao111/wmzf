@@ -2,7 +2,11 @@
 $ErrorActionPreference='Stop'
 $sourceRoot=Split-Path -Parent $MyInvocation.MyCommand.Path
 $root=$env:HF_DASHBOARD_ROOT
-if([string]::IsNullOrWhiteSpace($root)){$root=$sourceRoot}
+if([string]::IsNullOrWhiteSpace($root)){$root=if(Test-Path (Join-Path $sourceRoot 'dashboard-config.json')){$sourceRoot}else{Join-Path $sourceRoot 'instances/test'}}
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $sourceRoot $root $(if($env:HF_DASHBOARD_PORT){[int]$env:HF_DASHBOARD_PORT}else{8766}) 8766
+$env:HF_DASHBOARD_ROOT=$root
+$env:HF_DASHBOARD_PORT='8766'
 $statusFile=Join-Path $root 'service-status.json'
 $outputFile=Join-Path $root 'service-data.json'
 $lockFile=Join-Path $root 'service-update.lock'

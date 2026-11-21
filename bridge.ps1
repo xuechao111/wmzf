@@ -5,7 +5,8 @@ Add-Type -AssemblyName System.Web
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8766 }
-$workbenchApiVersion = '2026-10-30-replica-v7'
+if ($port -ne 8766) { throw '副本服务仅允许8766端口，已停止；不会启动或修改主看板。' }
+$workbenchApiVersion = '2026-11-21-replica-v24'
 $runningBridgeHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path)))).Replace('-','')
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
     $env:HF_DASHBOARD_SOURCE_ROOT
@@ -15,8 +16,13 @@ $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROO
     Split-Path -Parent $MyInvocation.MyCommand.Path
 }
 $sourceRoot = [IO.Path]::GetFullPath($sourceRoot)
+if($sourceRoot.TrimEnd('\','/') -ine ([IO.Path]::GetFullPath($PSScriptRoot)).TrimEnd('\','/')){throw 'INSTANCE_SOURCE_MISMATCH: 服务入口不能指定其他安装目录。'}
 $root = $env:HF_DASHBOARD_ROOT
 if ([string]::IsNullOrWhiteSpace($root)) { $root = Join-Path $sourceRoot 'instances\test' }
+. (Join-Path $PSScriptRoot 'instance-guard.ps1')
+Assert-WorkbenchPaths $sourceRoot $root $port 8766
+$env:HF_DASHBOARD_ROOT=$root
+$env:HF_DASHBOARD_PORT=[string]$port
 if (-not (Test-Path -LiteralPath $root)) { [void](New-Item -ItemType Directory -Path $root -Force) }
 $indexFile = Join-Path $sourceRoot 'index.html'
 $viewFile = Join-Path $sourceRoot 'view.html'
@@ -27,7 +33,6 @@ $aiFeedbackFile = Join-Path $root 'ai-feedback.json'
 $dashboardUrl = 'https://alidocs.dingtalk.com/'
 $crmUrl = 'https://codecamp-crm.codemao.cn/layout/my-class'
 $rulesFile = 'C:\Users\user\.codex\skills\codemao-group-completion-dashboard\references\rules.md'
-$legacySyncFile = 'C:\Users\user\Desktop\Documents\编程猫管理skill\codemao-student-profile-extracted\codemao-course-data\sync.py'
 $bundledPython = 'C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 function Test-PythonRuntime([string]$candidate) {
     if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) { return $false }
@@ -69,6 +74,7 @@ $scheduleAttemptFile = Join-Path $root '.schedule-attempts.local.json'
 $extensionUploadDir = Join-Path $root 'run-data\extension-upload'
 $mcpRelayDir = Join-Path $root 'run-data\mcp-relay'
 $staleStageSeconds = 360
+$replicaStatusOwner = ''
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 if (-not (Test-Path -LiteralPath $dashboardConfigFile) -and (Test-Path -LiteralPath $dashboardConfigBackupFile)) {
     Copy-Item -LiteralPath $dashboardConfigBackupFile -Destination $dashboardConfigFile -Force
@@ -147,7 +153,7 @@ function Save-BroadcastSchedule($value) {
     [IO.File]::WriteAllText((Join-Path $root 'broadcast-schedule.local.json'),($value | ConvertTo-Json -Depth 5),$utf8NoBom)
 }
 function Invoke-BroadcastSchedule {
-
+    
     $now = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'China Standard Time')
     $minute = $now.ToString('yyyy-MM-dd HH:mm')
     if ($script:lastBroadcastTick -eq $minute) { return }
@@ -216,7 +222,7 @@ function Get-DashboardConfig {
     $issues = @()
     $workbook = ([string]$defaults.workbookUrl).Trim()
     if ([string]::IsNullOrWhiteSpace($workbook) -or $workbook -eq 'https://alidocs.dingtalk.com/' -or $workbook -match '请替换|请填写') { $issues += '教学数据钉钉文档链接' }
-    $hasLegacyConnection = Test-Path -LiteralPath $legacySyncFile
+    $hasLegacyConnection = $false # Replica never borrows main credentials.
     if ([string]::IsNullOrWhiteSpace(([string]$defaults.dingtalkConnectionUrl).Trim()) -and -not $hasLegacyConnection) { $issues += '钉钉 MCP 连接地址' }
     if (-not ($defaults.portableMode -eq $true -or $defaults.isTestInstance -eq $true -or $hasLegacyConnection) -and -not $defaults.hasDingtalkAccessKey) { $issues += '钉钉 MCP 访问密钥' }
     $defaults.teachingConfigurationIssues = $issues
@@ -226,7 +232,7 @@ function Get-DashboardConfig {
 
 function Save-DashboardConfig($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
-    $workbook = [string]$payload.workbookUrl
+    $workbook = ([string]$payload.workbookUrl).Trim()
     if ($workbook -notmatch '^https://alidocs\.dingtalk\.com/') { throw '钉钉文档链接格式不正确。' }
     $renewalWorkbook = ([string]$payload.renewalWorkbookUrl).Trim()
     $nctWorkbook = ([string]$payload.nctWorkbookUrl).Trim()
@@ -249,6 +255,7 @@ function Save-DashboardConfig($bodyText) {
     if (Test-Path -LiteralPath $dashboardConfigFile) { try { $existingConfig = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
     $connectionUrl = ([string]$payload.dingtalkConnectionUrl).Trim()
     $connectionKey = if ($existingConfig) { [string]$existingConfig.dingtalkAccessKey } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$payload.dingtalkAccessKey)) { $connectionKey = ([string]$payload.dingtalkAccessKey).Trim() }
     $doubaoKey = ([string]$payload.doubaoApiKey).Trim()
     if ([string]::IsNullOrWhiteSpace($doubaoKey) -and $existingConfig) { $doubaoKey = [string]$existingConfig.doubaoApiKey }
     $portableMode = ($payload.portableMode -eq $true) -or ($existingConfig -and $existingConfig.portableMode -eq $true) -or (Test-EmbeddedMcpAuthorization $connectionUrl) -or ($env:HF_DASHBOARD_INSTANCE -eq 'test') -or ($root -ne $sourceRoot)
@@ -285,7 +292,37 @@ function Save-DashboardConfig($bodyText) {
     [IO.File]::WriteAllText($dashboardConfigBackupFile,$configJson,$utf8NoBom)
     $share = [ordered]@{ enabled=$config.shareEnabled; accessKey=$shareKey; title=$config.shareTitle }
     [IO.File]::WriteAllText($shareConfigFile,($share | ConvertTo-Json -Depth 4),$utf8NoBom)
-    return '配置已保存；下次更新将使用新配置。'
+    $confirmed = Get-DashboardConfig
+    foreach ($field in @('displayTitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','serviceWorkbookUrl')) {
+        if ([string]$confirmed.$field -cne [string]$config[$field]) { throw '配置回读校验失败，请保持配置窗口并重试；未启动数据更新。' }
+    }
+    Refresh-ConfigurationIdleStatuses
+    return '配置已保存并回读验证；下次更新将使用新配置。'
+}
+
+function Refresh-ConfigurationIdleStatuses {
+    $config = Get-DashboardConfig
+    foreach ($entry in @(@($statusFile,'teaching'),@($scholarshipStatusFile,'renewal'),@($serviceStatusFile,'service'))) {
+        $file=[string]$entry[0];$kind=[string]$entry[1]
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        try { $status=Get-Content -LiteralPath $file -Raw -Encoding UTF8|ConvertFrom-Json } catch { continue }
+        # Never overwrite a running task, failure or verified successful update.
+        if ([string]$status.state -ne 'idle') { continue }
+        if ($kind -eq 'teaching') {
+            $ready=$config.teachingReady
+            $status.message=if($ready){'教学数据配置已就绪，尚未执行更新。'}else{'教学数据配置尚未完成。'}
+            $status.detail=if($ready){'请确认浏览器CRM已登录，然后点击教学数据更新。'}else{'缺少：'+(@($config.teachingConfigurationIssues)-join '、')}
+        } elseif ($kind -eq 'renewal') {
+            $ready=-not [string]::IsNullOrWhiteSpace([string]$config.renewalWorkbookUrl)
+            $status.message=if($ready){'续费文档已配置，尚未执行更新。'}else{'续费文档尚未配置。'}
+            $status.detail=if($ready){'选择月份后点击续费表格数据更新；子表ID可留空自动查找奖学金明细。'}else{'请在配置面板填写续费文档链接。'}
+        } else {
+            $ready=$config.teachingReady -and ($config.serviceWorkbookUrl -or $config.workbookUrl)
+            $status.message=if($ready){'教学服务文档已配置，尚未执行更新。'}else{'教学服务配置尚未完成。'}
+            $status.detail=if($ready){'确认配置名称包含准确组名后，点击教学服务数据更新。'}else{'请先保存教学文档和独立连接授权。'}
+        }
+        [IO.File]::WriteAllText($file,($status|ConvertTo-Json -Depth 6 -Compress),$utf8NoBom)
+    }
 }
 
 function Expand-AiFeedbackItem($item) {
@@ -461,10 +498,17 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
     $bytes = [Convert]::FromBase64String([string]$payload.data)
     $jsonText = [Text.Encoding]::UTF8.GetString($bytes)
     $parsed = $jsonText | ConvertFrom-Json
-    if ($null -eq $parsed -or $null -eq $parsed.headers -or $null -eq $parsed.rows -or $parsed.rows.Count -eq 0) { throw '当前 Chrome CRM 页面返回了空数据。' }
+    if ($parsed.renewalError) { throw ('续费CRM采集失败：' + [string]$parsed.renewalError) }
+    if ($null -eq $parsed -or $null -eq $parsed.headers -or $null -eq $parsed.rows) { throw '续费CRM明细格式无效，未启动写入，原表保留。' }
+    if (@($parsed.rows).Count -eq 0) { throw ('所选续费月份 ' + [string]$payload.renewalMonth + ' · 首续 · 深圳战区返回0条，请核对CRM月份和账号可见范围；原表未清空。') }
     $renewalMonth = [string]$payload.renewalMonth
     if ($renewalMonth -notmatch '^\d{4}-(0[1-9]|1[0-2])-01$') { throw '请选择有效的续费月份。' }
     if ([string]$parsed.renewalMonth -ne $renewalMonth) { throw '续费月份校验不一致，已停止写入。' }
+    if ([int]$parsed.renewalScope.version -ne 1 -or [string]$parsed.renewalScope.groupScope -ne 'all' -or
+        [string]$parsed.renewalScope.region -ne '深圳战区' -or [string]$parsed.renewalScope.node -ne '首续' -or
+        [string]$parsed.renewalScope.month -ne $renewalMonth) {
+        throw '续费采集范围未确认，已停止写入。请安装副本专用连接器1.6.80并刷新页面后重试。'
+    }
     $sourceFile = Join-Path $root 'renewal-table-source.json'
     [IO.File]::WriteAllBytes($sourceFile,$bytes)
     $startedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -589,8 +633,14 @@ function Set-ServiceClientStatus($bodyText) {
 
 function Repair-StaleStatus {
     $status = Read-StatusObject
-    if ($null -eq $status -or [string]$status.state -ne 'running') { return }
+    if ($null -eq $status -or ([string]$status.state -ne 'running' -and -not ($port -eq 8766 -and [string]$status.state -eq 'waiting'))) { return }
     try {
+        # A live writer can legitimately take longer during remote throttling.
+        # Its exclusive lock is stronger evidence than an old progress time.
+        $taskLockPath = Join-Path $root 'update.lock'
+        if (Test-Path -LiteralPath $taskLockPath) {
+            try { $taskLockHandle=[IO.File]::Open($taskLockPath,'Open','ReadWrite','None'); $taskLockHandle.Dispose() } catch { return }
+        }
         $lastChange = [DateTime]::ParseExact([string]$status.time,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
         $age = ((Get-Date) - $lastChange).TotalSeconds
         if ($age -gt $staleStageSeconds) {
@@ -834,6 +884,21 @@ function Send-ClassPreparation($stream, [string]$response, [string]$scope = 'tea
 function Send-ExtensionClasses($stream, $bodyText = '') {
     $slotKey = 'manual'
     try { if (-not [string]::IsNullOrWhiteSpace($bodyText)) { $slotKey = [string](($bodyText | ConvertFrom-Json).slotKey) } } catch {}
+    if ($port -eq 8766) {
+        $request = $null
+        try { $request = $bodyText | ConvertFrom-Json } catch {}
+        $owner = [string]$request.statusOwner
+        if (($slotKey -notlike 'manual*' -and $slotKey -ne 'comparison-manual') -or $owner -notmatch '^manual-[0-9]+-[a-f0-9]+$') {
+            Send-Json $stream '副本只允许新版连接器手动更新；旧自动任务已拒绝，不改变现有数据和状态。' '403 Forbidden'
+            return
+        }
+        if ($script:replicaStatusOwner -and $script:replicaStatusOwner -ne $owner -and (Test-RecentUpdateRunning)) {
+            Send-Json $stream '副本已有手动更新正在执行。' '409 Conflict'
+            return
+        }
+        $script:replicaStatusOwner = $owner
+        if ($slotKey -eq 'comparison-manual') { Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes('{"ok":true}')) 'application/json; charset=utf-8'; return }
+    }
     $response = Join-Path $root 'extension-classes.json'
     if ($classPreparationJobs.ContainsKey($response)) { Send-ClassPreparation $stream $response; return }
     if (Test-ScheduledSlotAlreadyCompleted $slotKey) {
@@ -986,6 +1051,9 @@ function Commit-ExtensionChunks($bodyText) {
 
 function Set-ExtensionStatus($bodyText) {
     $payload = $bodyText | ConvertFrom-Json
+    if ($port -eq 8766 -and (-not $script:replicaStatusOwner -or [string]$payload.statusOwner -ne $script:replicaStatusOwner)) {
+        return '旧连接器或未准备的任务状态已忽略；副本只接受当前手动任务。'
+    }
     $allowed = @('idle','running','waiting','success','error')
     $state = [string]$payload.state
     if ($allowed -notcontains $state) { $state = 'error' }
@@ -1020,6 +1088,9 @@ if (-not (Test-Path -LiteralPath $serviceStatusFile)) {
     $serviceInitial = [ordered]@{state='idle';message='尚未更新教学服务数据。';detail='完成配置后可从当前 Chrome 页面更新。';time=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss');startedAt='';lastSuccessTime=''} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText($serviceStatusFile,$serviceInitial,$utf8NoBom)
 }
+# Recover a stale task marker immediately when the isolated replica service
+# starts. A crashed process must not leave the UI showing a task forever.
+Repair-StaleStatus
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any,$port)
 try { $listener.Start() } catch { if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start-Process "http://127.0.0.1:$port/" }; exit 0 }
 if ($env:HF_DASHBOARD_NO_OPEN -ne '1') { Start-Process "http://127.0.0.1:$port/" }
@@ -1106,7 +1177,7 @@ while ($true) {
             '/broadcast-schedule' {
                 try {
                     if ($method -eq 'POST') {
-
+                        
                         $inputSchedule=$bodyText | ConvertFrom-Json
                         $times=@($inputSchedule.times | Select-Object -Unique)
                         if ($times.Count -lt 1 -or $times.Count -gt 12) { throw '请选择1至12个发送时间。' }
@@ -1131,7 +1202,7 @@ while ($true) {
                 }
             }
             '/health' {
-                $health = @{ ok=$true; apiVersion=$workbenchApiVersion; bridgeHash=$runningBridgeHash; sourceRoot=$sourceRoot; runtimeRoot=$root } | ConvertTo-Json -Compress
+                $health = @{ ok=$true; instance='replica'; port=8766; apiVersion=$workbenchApiVersion; bridgeHash=$runningBridgeHash; sourceRoot=$sourceRoot; runtimeRoot=$root } | ConvertTo-Json -Compress
                 Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($health)) 'application/json; charset=utf-8'
             }
             '/' { Send-File $stream $indexFile 'text/html; charset=utf-8' }
@@ -1141,7 +1212,7 @@ while ($true) {
             }
             '/assets/codemao-logo.png' { Send-File $stream (Join-Path $sourceRoot 'assets\codemao-logo.png') 'image/png' }
             '/run' { Send-Json $stream (Invoke-LegacyUpdate) }
-            '/status' { Repair-StaleStatus; Send-File $stream $statusFile 'application/json; charset=utf-8' }
+            '/status' { Repair-StaleStatus; Refresh-ConfigurationIdleStatuses; Send-File $stream $statusFile 'application/json; charset=utf-8' }
             '/broadcast' {
                 if ($method -ne 'POST') { Send-Json $stream '请使用 POST 发送通晒。' '405 Method Not Allowed' }
                 else { try { $broadcastJson=(Start-TeacherBroadcast | ConvertTo-Json -Compress); Send-Bytes $stream ([Text.Encoding]::UTF8.GetBytes($broadcastJson)) 'application/json; charset=utf-8' } catch { Send-Json $stream $_.Exception.Message '500 Internal Server Error' } }

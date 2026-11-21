@@ -2,7 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 
-const root=process.env.HF_DASHBOARD_ROOT||path.dirname(fileURLToPath(import.meta.url));
+function isolatedRuntimeRoot(source, fallback, expectedPort){
+  if(String(process.env.HF_DASHBOARD_PORT||expectedPort)!==String(expectedPort))throw new Error("INSTANCE_PORT_MISMATCH");
+  const base=fs.realpathSync(source),candidate=path.resolve(process.env.HF_DASHBOARD_ROOT||fallback);
+  const relative=path.relative(base,candidate);
+  if(relative===".."||relative.startsWith(".."+path.sep)||path.isAbsolute(relative))throw new Error("INSTANCE_ROOT_MISMATCH");
+  let current=candidate;
+  while(true){
+    if(fs.existsSync(current)&&fs.lstatSync(current).isSymbolicLink())throw new Error("INSTANCE_ROOT_REPARSE_POINT");
+    const parent=path.dirname(current);if(parent===current)break;current=parent;
+  }
+  return candidate;
+}
+
+
+const root=isolatedRuntimeRoot(path.dirname(fileURLToPath(import.meta.url)),path.join(path.dirname(fileURLToPath(import.meta.url)),"instances","test"),8766);
 const settings=(()=>{try{return JSON.parse(fs.readFileSync(path.join(root,"dashboard-config.json"),"utf8"))}catch{return {}}})();
 const workbook=settings.nctWorkbookUrl||"";
 const sheetName="年卡招考数据";
@@ -10,7 +24,6 @@ const columnMap={
   "订单Id":"orderId","用户Id":"userId","业务线":"businessLine","学员姓名":"userName","微信":"wechatNickName","已用课时":"usedTime","总课时":"totalTime","订单状态":"orderStatusStr","下单时间":"placedAt","订单来源":"orderSourceStr","订单类型":"orderTypeStr","优惠金额":"totalDiscount","实付金额":"actualPayment","付款方式":"payMethodStr","支付渠道":"payPlatformStr","商品指导价":"guidePrice","开单人":"creatorName","开单人组织架构":"creatorOrganization","开单人在职状态":"creatorStatusStr","是否售后":"afterSale","售后类型":"afterSaleType","补差金额":"differenceAmount","应付金额":"total","商品名称":"spuName","商品编码":"spuNumber","规格名称":"skuName","规格编码":"skuNumber","支付流水号":"payNo","支付状态":"payStatusStr","付款时间":"paidAt","归属人":"ownerName","归属人在职状态":"ownerState","业绩归属班期":"ownerTermStr","归属类型":"ownerTypeStr","分班状态":"classAssignStatusStr","渠道":"lbkChannel","订单认领状态":"ownerStatusStr","项目链接名称":"lbkOfficialPage","电销跟进人":"counselorName","电销组织架构":"counselorOrganization","电销在职状态":"counselorStatusStr"
 };
 const defaultHeaders=["订单Id","用户Id","学员姓名","订单状态","下单时间","商品名称","商品编码","规格名称","规格编码","实付金额","支付状态","付款时间","归属人","业绩归属班期","是否售后"];
-const credentialsFiles=[process.env.CODEMAO_SCHOLARSHIP_CREDENTIALS_FILE,"C:/Users/user/Desktop/Documents/编程猫管理skill/codemao-student-profile-extracted/codemao-course-data/sync.py"].filter(Boolean);
 const clean=v=>String(v??"").replace(/\s+/g," ").trim();
 const csvEscape=v=>/[",\r\n]/.test(String(v??""))?`"${String(v??"").replace(/"/g,'""')}"`:String(v??"");
 const matrixToCsv=m=>m.map(r=>r.map(csvEscape).join(",")).join("\r\n");
@@ -36,7 +49,7 @@ function displayValue(row,header,source){
   }
   return row[columnMap[header]||header]??"";
 }
-function credentials(){if(settings.dingtalkConnectionUrl)return {url:settings.dingtalkConnectionUrl,token:settings.dingtalkAccessKey||""};const file=credentialsFiles.find(fs.existsSync);if(!file)throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND");const text=fs.readFileSync(file,"utf8"),url=text.match(/MCP_URL\s*=\s*["']([^"']+)["']/)?.[1],token=text.match(/ACCESS_TOKEN\s*=\s*["']([^"']+)["']/)?.[1];if(!url)throw new Error("DINGTALK_MCP_CONFIG_INVALID");return {url,token:token||""}}
+function credentials(){if(settings.dingtalkConnectionUrl)return {url:settings.dingtalkConnectionUrl,token:settings.dingtalkAccessKey||""};throw new Error("DINGTALK_MCP_CONFIG_NOT_FOUND:请在副本配置面板填写独立连接授权");}
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function networkError(error,url,name,attempts){const cause=error?.cause;let host="钉钉连接";try{host=new URL(url).host||host}catch{}const reason=[error?.message,cause?.code,cause?.message].filter(Boolean).join(" / ");return new Error(`DINGTALK_NETWORK_FAILED:${host}:${name}:已重试${attempts}次:${reason||"网络连接失败"}`)}
 async function mcp(name,args,timeoutMs=180000){const {url,token}=credentials(),attempts=4;for(let attempt=1;attempt<=attempts;attempt++){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);try{const headers={"content-type":"application/json",accept:"application/json"};if(token)headers.authorization=`Bearer ${token}`;const response=await fetch(url,{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",method:"tools/call",params:{name,arguments:args},id:1}),signal:controller.signal});if(!response.ok){const error=new Error(`DINGTALK_MCP_HTTP_${response.status}`);error.transient=response.status===408||response.status===429||response.status>=500;throw error}const envelope=await response.json();if(envelope.error)throw new Error(`DINGTALK_MCP_ERROR:${JSON.stringify(envelope.error)}`);const text=envelope.result?.content?.find(x=>x.type==="text")?.text,result=text?JSON.parse(text):envelope.result;if(result?.success===false)throw new Error(`DINGTALK_TOOL_ERROR:${result.errorMsg||JSON.stringify(result)}`);return result}catch(error){const transient=error?.transient||error?.name==="AbortError"||error instanceof TypeError||["ECONNRESET","ECONNREFUSED","ETIMEDOUT","ENOTFOUND","EAI_AGAIN","UND_ERR_CONNECT_TIMEOUT","UND_ERR_SOCKET"].includes(error?.cause?.code);if(!transient)throw error;if(attempt===attempts)throw networkError(error,url,name,attempts);await wait([700,1600,3200][attempt-1]||3200)}finally{clearTimeout(timer)}}}

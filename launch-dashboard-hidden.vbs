@@ -1,4 +1,4 @@
-Option Explicit
+﻿Option Explicit
 
 Dim shell, fileSystem, root, ensureScript, command
 Set shell = CreateObject("WScript.Shell")
@@ -13,5 +13,5 @@ shell.Run command, 0, False
 WScript.Sleep 1800
 
 ' Open the dashboard in the default browser.
-shell.Run "http://127.0.0.1:8765/", 1, False
+shell.Run "http://127.0.0.1:8766/", 1, False
 
