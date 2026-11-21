@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Web
 
 $port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8766 }
 if ($port -ne 8766) { throw '副本服务仅允许8766端口，已停止；不会启动或修改主看板。' }
-$workbenchApiVersion = '2026-11-21-replica-v24'
+$workbenchApiVersion = '2026-11-21-replica-v25'
 $runningBridgeHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path)))).Replace('-','')
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
     $env:HF_DASHBOARD_SOURCE_ROOT

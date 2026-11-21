@@ -992,6 +992,16 @@ html:is([data-cover="calm"],[data-cover="sand"],[data-cover="mist"]) #page-home 
 try{let saved=localStorage.getItem('codemaoCoverTheme:replica:8766'); if(allowed.includes(saved))choice=saved;}catch{}
 document.documentElement.dataset.cover=choice;})();
 </script>
+<style id="replica-update-entry">
+#page-home .home-heading>div:first-child{flex:1;min-width:220px}
+#page-home .home-title{max-width:100%}
+#page-home .cover-header-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex-shrink:0}
+#page-home #selfUpdateBtn{display:inline-flex!important;align-items:center;justify-content:center;min-height:38px;padding:9px 13px;border-radius:20px;background:#e4eddf;color:#35583a;border:1px solid #b8cbb0;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer}
+#page-home #selfUpdateBtn:disabled{cursor:progress;opacity:.65}
+#page-home #selfUpdateMessage{display:block;margin:0;padding:0;max-width:100%;font-size:12px;line-height:1.6;color:#586d5b;overflow-wrap:anywhere}
+#page-home #selfUpdateMessage[data-state="error"]{color:#a1362c}
+@media(max-width:700px){#page-home .cover-header-actions{width:100%}#page-home #selfUpdateBtn{flex:1}}
+</style>
 </head>
 <body>
 <main data-composition-id="teaching-console" data-width="1440" data-height="900" data-start="0" data-duration="8" data-track-index="0">
@@ -1005,7 +1015,8 @@ document.documentElement.dataset.cover=choice;})();
       <section id="page-home" class="page active">
 <div class="home-layout">
 <article class="card hero">
-  <div class="home-heading"><div><div class="kicker" data-workbench="CODEMAO TEACHING OPS">教学数据工作台</div><h1 class="home-title"><span>深圳战区 · 屹柯组</span></h1><p class="home-subtitle">更新、查看与协作，在这里有序进行。</p></div><button type="button" id="coverThemeToggle" class="cover-theme-toggle" aria-haspopup="dialog" aria-controls="coverThemeDialog">主题外观</button></div>
+  <div class="home-heading"><div><div class="kicker" data-workbench="CODEMAO TEACHING OPS">教学数据工作台</div><h1 class="home-title"><span>深圳战区 · 屹柯组</span></h1><p class="home-subtitle">更新、查看与协作，在这里有序进行。</p></div><div class="cover-header-actions"><button type="button" id="coverThemeToggle" class="cover-theme-toggle" aria-haspopup="dialog" aria-controls="coverThemeDialog">主题外观</button><button type="button" id="selfUpdateBtn" class="cover-theme-toggle" title="仅更新副本8766程序，保留本机配置与数据">一键更新工作台</button></div></div>
+  <small id="selfUpdateMessage" class="replica-update-note" role="status" aria-live="polite">副本 v25 · 程序更新保留本机配置与手动数据</small>
   <div class="quick-stats"><div class="quick"><b id="statTables">5</b><span>核心数据看板</span></div><div class="quick"><b id="statPeriod">—</b><span>当前统计周期</span></div><div class="quick"><b id="statUpdated">—</b><span>最近更新时间</span></div></div>
   <div class="primary-actions"><button id="updateBtn" class="run-btn">组内教学数据更新<small id="updateBrief">尚无成功更新时间</small></button> <button id="liveDataUpdateBtn" class="run-btn live-data-btn">教学数据更新<small id="liveDataBrief">尚无成功更新时间</small></button> <button id="goData" class="view-btn">进入数据看板 →</button></div>
   <details class="home-progress" id="connectorSetup"><summary style="cursor:pointer;font-weight:600">副本连接器：<span id="connectorVersionStatus">正在检测实际加载版本…</span> · 安装指引</summary><div style="line-height:1.9;padding-top:10px">此副本使用专用连接器 <b>1.6.80</b>，与主工作台隔离。<ol><li>先完整解压修复包，运行“修复副本更新失败.bat”，选择原副本安装目录。</li><li>在地址栏打开 <code>chrome://extensions</code>（Edge 使用 <code>edge://extensions</code>），开启开发者模式。</li><li>点击“加载已解压的扩展程序”，选择<b>原副本安装目录内的 chrome-extension 文件夹</b>，名称应为“编程猫副本工作台连接器”。已安装该专用连接器则点重新加载。</li><li>保留主看板使用的连接器。回到此页按 Ctrl+F5，看到“已连接 1.6.80”后再更新。</li></ol>仅下载压缩包不会改变浏览器正在加载的连接器。</div></details>
@@ -1019,7 +1030,7 @@ document.documentElement.dataset.cover=choice;})();
 <aside class="right-stack">
 <section class="card home-more"><div class="card-title"><h2>更新设置</h2><span class="pill">手动模式</span></div><p class="home-panel-note">副本只支持手动点击教学数据更新，避免自动任务与主看板互相影响。</p><button id="scheduleBtn" class="schedule-btn" hidden disabled>自动更新<small id="scheduleBrief">副本已关闭自动更新</small></button> <button id="comparisonUpdateBtn" class="schedule-btn" style="grid-area:auto;grid-column:1/-1;min-height:48px">其他组老师独立更新<small id="comparisonBrief">单独采集并保留已核实直播名单</small></button></section>
 <section class="card dataset-card"><div class="card-title"><h2>现有看板</h2><span id="tableCount" class="pill">读取中</span></div><div id="datasetList" class="dataset-list"></div></section> <section class="card links-card sidebar-links" aria-label="快捷入口"><button class="ghost" data-action="dashboard">打开钉钉</button><button class="ghost" data-action="crm">打开 CRM</button><button class="ghost" data-page="nct">NCT年卡</button><button id="configBtn" class="ghost">配置面板</button></section>
-<section class="card home-more"><div class="card-title"><h2>工作台版本</h2><span class="pill">2026.10.30</span></div><button id="selfUpdateBtn" class="ghost">更新工作台</button><small id="selfUpdateMessage" aria-live="polite">保留本机配置与手动填写数据</small></section></aside>
+</aside>
 </div></section>
 <section id="page-data" class="page data-page">
         <div class="data-layout">
@@ -1415,15 +1426,16 @@ $('#liveDataUpdateBtn').onclick=updateAll;$('#updateBtn').onclick=updateAll;$('#
 <script>
   (()=>{const button=document.querySelector('#aiSubmit');if(!button)return;button.onclick=async()=>{const status=document.querySelector('#aiStatus'),question=document.querySelector('#aiQuestion').value.trim();if(!question){status.textContent='请先输入问题';return}button.disabled=true;status.textContent='豆包正在读取看板并分析，通常需要 10–60 秒…';try{await json('/ai-ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question}),timeoutMs:135000});status.textContent='分析完成，反馈已写入“屹柯完课展示”';document.querySelector('#aiQuestion').value='';await json('/ai-feedback',{timeoutMs:15000}).then(data=>{const target=document.querySelector('#aiFeedbackTable');target.innerHTML=(data.rows||[]).length?`<table class="ai-table"><thead><tr><th>分析时间</th><th>问题</th><th>豆包反馈</th><th>模型</th></tr></thead><tbody>${data.rows.map(row=>`<tr><td>${esc(row.time)}</td><td>${esc(row.question)}</td><td><div class="ai-feedback-text">${esc(row.feedback)}</div></td><td>${esc(row.model)}</td></tr>`).join('')}</tbody></table>`:'<div class="ai-empty">暂无分析反馈</div>'})}catch(e){status.textContent=e.message}finally{button.disabled=false}}})();
 </script>
-<script>
+<script id="replica-self-update-controls">
 (()=>{
   const button=document.querySelector('#selfUpdateBtn'),message=document.querySelector('#selfUpdateMessage');
+  if(!button||!message)return;
   let polling=false;
   async function checkUpdate(){
     if(!polling)return;
     try{
       const status=await json('/self-update-status');
-      message.textContent=[status.message,status.detail].filter(Boolean).join(' · ');
+      message.dataset.state=status.state||'';message.textContent=[status.message,status.detail].filter(Boolean).join(' · ');
       if(status.state==='success'){polling=false;message.textContent='工作台更新完成，正在重新连接…';setTimeout(()=>location.reload(),5000);return}
       if(status.state==='error'){polling=false;button.disabled=false;button.textContent='重试更新工作台';return}
     }catch{message.textContent='更新期间服务正在重启，正在重新连接…'}
@@ -1431,9 +1443,11 @@ $('#liveDataUpdateBtn').onclick=updateAll;$('#updateBtn').onclick=updateAll;$('#
   }
   button.onclick=async()=>{
     if(polling)return;
+    if(location.port!=='8766'){message.dataset.state='error';message.textContent='此按钮仅用于副本8766，请打开正确副本地址。';return}
+    message.dataset.state='running';
     button.disabled=true;button.textContent='正在更新工作台…';message.textContent='正在下载程序更新，本机配置和数据会保留。';
-    try{await json('/self-update',{method:'POST',timeoutMs:15000});polling=true;checkUpdate()}
-    catch(error){button.disabled=false;button.textContent='重试更新工作台';message.textContent=error.message}
+    try{await json('/self-update',{method:'POST',timeoutMs:15000});polling=true;await checkUpdate()}
+    catch(error){message.dataset.state='error';button.disabled=false;button.textContent='重试更新工作台';message.textContent=error.message}
   };
 })();
 </script>
