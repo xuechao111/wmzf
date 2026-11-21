@@ -16,10 +16,10 @@ try {
     foreach($file in @($statusFile,$scholarshipStatusFile,$serviceStatusFile)){
         [IO.File]::WriteAllText($file,'{"state":"idle","message":"old missing config","detail":"old","time":"unchanged","lastSuccessTime":""}',$utf8NoBom)
     }
-    $payload=@{displayTitle='深圳战区 · 致远组';workbookUrl='https://alidocs.dingtalk.com/i/nodes/synthetic';dingtalkConnectionUrl='https://mcp-gw.dingtalk.com/test-only';dingtalkAccessKey='synthetic-key';portableMode=$true;renewalWorkbookUrl='https://alidocs.dingtalk.com/i/nodes/syntheticRenewal';classes=@();shareEnabled=$false}
+    $payload=@{serviceGroupName='凌风踏浪组';displayTitle='深圳战区 · 致远组';workbookUrl='https://alidocs.dingtalk.com/i/nodes/synthetic';dingtalkConnectionUrl='https://mcp-gw.dingtalk.com/test-only';dingtalkAccessKey='synthetic-key';portableMode=$true;renewalWorkbookUrl='https://alidocs.dingtalk.com/i/nodes/syntheticRenewal';classes=@();shareEnabled=$false}
     Save-DashboardConfig ($payload|ConvertTo-Json -Depth 6)|Out-Null
     $saved=Get-DashboardConfig
-    if(-not $saved.teachingReady -or -not $saved.hasDingtalkAccessKey){throw 'Saved configuration not ready'}
+    if($saved.serviceGroupName-ne'凌风踏浪组' -or -not $saved.teachingReady -or -not $saved.hasDingtalkAccessKey){throw 'Saved configuration not ready'}
     $private=Get-Content $dashboardConfigFile -Raw -Encoding UTF8|ConvertFrom-Json
     if($private.dingtalkAccessKey-ne'synthetic-key'){throw 'Explicit key was not saved'}
     foreach($file in @($statusFile,$scholarshipStatusFile,$serviceStatusFile)){

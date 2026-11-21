@@ -6,7 +6,7 @@ const read=name=>fs.readFileSync(new URL(`../${name}`,import.meta.url),'utf8');
 const source=read('chrome-extension/background.js');
 function listenerHarness(){
  let listener;const calls=[];
- const ctx={chrome:{runtime:{id:'replica-id',getManifest:()=>({version:'1.6.80'}),onMessage:{addListener:f=>listener=f}}},
+ const ctx={chrome:{runtime:{id:'replica-id',getManifest:()=>({version:'1.6.81'}),onMessage:{addListener:f=>listener=f}}},
    runScheduledUpdate:async(...args)=>calls.push(args),Date};
  vm.runInNewContext(source.slice(source.indexOf('chrome.runtime.onMessage.addListener(')),ctx);
  return {calls,send:(message,sender={})=>{let reply;listener(message,sender,r=>reply=r);return reply}};
@@ -35,7 +35,7 @@ test('selected dedicated connector starts exactly one manual task',()=>{
 });
 test('ping reports actual replica identity without starting work or leasing a relay',()=>{
  const h=listenerHarness(),reply=h.send({source:'codemao-replica-dashboard',type:'ping',localBase:'http://127.0.0.1:8766'});
- assert.equal(reply.instance,'replica');assert.equal(reply.port,8766);assert.equal(reply.extensionId,'replica-id');assert.equal(reply.version,'1.6.80');assert.equal(h.calls.length,0);
+ assert.equal(reply.instance,'replica');assert.equal(reply.port,8766);assert.equal(reply.extensionId,'replica-id');assert.equal(reply.version,'1.6.81');assert.equal(h.calls.length,0);
 });
 test('legacy alarms are cleared without starting a background update',async()=>{
  const code=source.slice(source.indexOf('chrome.alarms.onAlarm.addListener('),source.indexOf('chrome.runtime.onStartup'));

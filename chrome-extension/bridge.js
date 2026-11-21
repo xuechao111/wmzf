@@ -1,6 +1,6 @@
 // Dedicated bridge also understands old replica pages, but never runs on8765.
 if(/^http:\/\/(127\.0\.0\.1|localhost):8766$/.test(location.origin)){
-  const key="__codemaoReplicaBridgeInstalled",version="1.6.80";
+  const key="__codemaoReplicaBridgeInstalled",version="1.6.81";
   const previous=globalThis[key];
   if(!previous||previous.version!==version||previous.extensionId!==chrome.runtime.id){
     if(previous?.listener)window.removeEventListener("message",previous.listener);

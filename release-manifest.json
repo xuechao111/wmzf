@@ -1,6 +1,6 @@
 {
-  "version": "2026.11.21-replica-v25-update-entry",
-  "connectorVersion": "1.6.80",
+  "version": "2026.11.21-replica-v26-crm-group",
+  "connectorVersion": "1.6.81",
   "files": [
     {
       "path": "DESIGN.md",
@@ -20,7 +20,7 @@
     },
     {
       "path": "bridge.ps1",
-      "sha256": "7f222677f696699d6913018843514c0f0f5a7e5b4756bb3cd721cc7832a0952b"
+      "sha256": "23312d1c4195d1eb74d81b4dc6f35af180b0f8a4b9875871ad027c2d1eb0a5fc"
     },
     {
       "path": "broadcast_report.py",
@@ -36,15 +36,15 @@
     },
     {
       "path": "chrome-extension/background.js",
-      "sha256": "174a149b1f0a50359bda8e06f197d1015403debadfb376f781ebb2844611f909"
+      "sha256": "4859b5f1f5a5063f643a184dae6ff9dc3cfc4173cc0bb2be060b4b086e37f116"
     },
     {
       "path": "chrome-extension/bridge.js",
-      "sha256": "a29e73d20af23b8046776c2ec145ab7bc6e9035dc67357324740f8780347abeb"
+      "sha256": "bd0fa37f2e86a758b8dc58966a83e949e46276c5c54800c4261216be312a903a"
     },
     {
       "path": "chrome-extension/manifest.json",
-      "sha256": "8c5c505f32da4f50389cdb4f77208380ae7bc6d141aba98207be040acf2b3e68"
+      "sha256": "3d15b25c5f3ebdaaf6015e650abce687e104df50ed4ab2742ba92be4e6daa017"
     },
     {
       "path": "comparison_live_cache.py",
@@ -92,7 +92,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "0fe6b528447559c14b83e1dcc682f0685264d9e9d7cab5a0a73e3aab6d4a2215"
+      "sha256": "c8264b9e33effb3c3ff41fbd72215692177918bb8d20ce27f5a7dc20e7244bdd"
     },
     {
       "path": "launch-dashboard-hidden.vbs",
@@ -112,7 +112,7 @@
     },
     {
       "path": "repair-replica-update.ps1",
-      "sha256": "4c715e795a97b2b672e20040569aa430fea79fed8ac6d47ccc39ef62c4e7577c"
+      "sha256": "276479f9e1f83d13db5c4721216ba8f9f4d7911aae47966219eb65b73595be08"
     },
     {
       "path": "replica-diagnostics.ps1",
@@ -188,7 +188,7 @@
     },
     {
       "path": "sync-service-data.mjs",
-      "sha256": "3acb71a10def163771dac12131cea98cec7b5e335c867cdb0088b002495c604a"
+      "sha256": "b4ac0649d3a17c5ab2d2f63fab367fb9b60fc68a5540064defe018b9e69cd942"
     },
     {
       "path": "tests/broadcast-result.test.ps1",
@@ -348,7 +348,7 @@
     },
     {
       "path": "使用说明.txt",
-      "sha256": "dad396982f31096ca51f3c90362b164f31082cd18997671cea4f29e1fa692cfd"
+      "sha256": "2c32bedfa95e65c1cefc1b9511413063c6af9d8d59a95f7622676c2d4656e507"
     },
     {
       "path": "修复副本更新失败.bat",
@@ -400,7 +400,7 @@
     },
     {
       "path": "tests/replica-connector-isolation.test.mjs",
-      "sha256": "d470963549fe38a88e017e4e1e1656b9e16d24ec591886a08dfaa709af0977ee"
+      "sha256": "a05b9d0f7c29ec19b3f56d66568379c669329fbee9371b645341067e36dfd97b"
     },
     {
       "path": "一键修复副本.bat",
@@ -408,7 +408,7 @@
     },
     {
       "path": "replica-connection-guide.html",
-      "sha256": "306197c19bafc5ac16b6051a2dcbfd7683729805b1c2401e8feff50620ab6864"
+      "sha256": "8ee2a200156053671e8926fb311d3081e28cef04f4c82593f62d36a470efcf2e"
     },
     {
       "path": "tests/replica-launcher.test.ps1",
@@ -420,7 +420,7 @@
     },
     {
       "path": "完整版安装说明.md",
-      "sha256": "d8d8414c2a8a5156b4dcd71fd4290b8ebaab101e91d5905099b079298dc36ca0"
+      "sha256": "ee8c63aa17fcb0096d6ded93e8730bda72bb639499d1fbe5671c0647fdd9f938"
     },
     {
       "path": "instance-guard.ps1",
@@ -456,7 +456,7 @@
     },
     {
       "path": "tests/service-group-scope.test.mjs",
-      "sha256": "416a83b1341b994dc700ded386671c6c2045488bb409de99ce7cd8cf1b195f9f"
+      "sha256": "eeed1d6411cce4489e8dc1a9b59f8cc418caa188cd0abd9c996a42330c2df1a2"
     },
     {
       "path": "tests/test_rolling_period_verification.py",
@@ -464,7 +464,7 @@
     },
     {
       "path": "tests/config-save.test.ps1",
-      "sha256": "ffb4423ff407f9fec7151e6da7221dc869a8bb11bfd7a0c4b6f88a1fd436a176"
+      "sha256": "e6a82b21a930cd0b0fd706673e89600c8a901d790caaa706f730711bd8c841d8"
     },
     {
       "path": "tests/config-save-readback.test.mjs",

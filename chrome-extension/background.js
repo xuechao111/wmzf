@@ -760,9 +760,12 @@ function serviceTodayDate(selection){
 }
 
 function configuredServiceGroup(config={}){
+  const explicit=String(config.serviceGroupName||"").trim();
   const title=String(config.displayTitle||"").trim();
-  const group=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
-  if(!group.endsWith("组")||/[\r\n]/.test(group)||group.length>40)throw new Error("请在配置面板的工作台名称填写本组名称，例如：深圳战区 · 致远组");
+  const candidate=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
+  // Migrate known decorative title prefixes only; never guess a teacher/group alias.
+  const group=explicit||candidate.replace(/^(?:编程猫\s*)?(?:教学数据工作台|组内教学控制台|教学工作台|教学控制台)\s*[:：·—-]?\s*/,"");
+  if(!group.endsWith("组")||/[\r\n|｜·•]/.test(group)||group.length>40)throw new Error("请在配置面板的CRM小组名称填写完整组名，例如：凌风踏浪组");
   return group;
 }
 async function fetchServiceInCurrentChrome(requestedSelection){
@@ -853,7 +856,7 @@ async function fetchServiceInCurrentChrome(requestedSelection){
             if(!raw||!Array.isArray(raw.data))throw new Error(`CRM_SERVICE_TABLE_INVALID:${id}:${dimension}`);
             if(raw.rowcount!=null&&Number(raw.rowcount)>raw.data.length)throw new Error(`CRM_SERVICE_ROWS_TRUNCATED:${id}:${dimension}:${raw.data.length}/${raw.rowcount}`);
             if(!raw.data.length&&allowEmpty)return {chartId:chart.id||chart.slice_id,rows:[],headers:[],granular:false,aggregation:"summary-chart",empty:true};
-            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:dates=${filterDates.join(",")}`);
+            if(!raw.data.length)throw new Error(`CRM_SERVICE_NO_ROWS:${id}:${dimension}:group=${serviceSelection.groupName}:dates=${filterDates.join(",")}:本组在所选时段暂无数据，请核对配置面板的CRM小组名称`);
             const verbose=raw.verbose_map||{},rawColumns=raw.colnames||Object.keys(raw.data[0]||{}),physical=rawColumns.map(normalize);
             // Superset has returned verbose_map in both directions over time
             // (physical -> display name and display name -> physical).  Resolve

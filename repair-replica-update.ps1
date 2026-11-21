@@ -66,8 +66,8 @@ try {
     Write-Output '副本服务已通过8766健康校验；浏览器连接器需在首页确认。' 
     Write-Output ('请加载此文件夹：' + (Join-Path $target.install 'chrome-extension'))
     Write-Output '在chrome://extensions 或 edge://extensions，开启开发者模式，点击加载已解压的扩展程序，选择上面文件夹。'
-    Write-Output '名称应为“编程猫副本工作台连接器”，版本1.6.80；不要删除主看板使用的连接器。'
-    Write-Output '回到副本8766，按Ctrl+F5。首页显示“已连接1.6.80”后再点击教学数据更新。'
+    Write-Output '名称应为“编程猫副本工作台连接器”，版本1.6.81；不要删除主看板使用的连接器。'
+    Write-Output '回到副本8766，按Ctrl+F5。首页显示“已连接1.6.81”后再点击教学数据更新。'
     Write-Output '仅下载修复包或重新加载其他文件夹中的旧连接器，不会完成连接器升级。' 
     exit 0
 } catch {

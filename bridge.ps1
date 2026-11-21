@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Web
 
 $port = if ($env:HF_DASHBOARD_PORT) { [int]$env:HF_DASHBOARD_PORT } else { 8766 }
 if ($port -ne 8766) { throw '副本服务仅允许8766端口，已停止；不会启动或修改主看板。' }
-$workbenchApiVersion = '2026-11-21-replica-v25'
+$workbenchApiVersion = '2026-11-21-replica-v26'
 $runningBridgeHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path)))).Replace('-','')
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($env:HF_DASHBOARD_SOURCE_ROOT)) {
     $env:HF_DASHBOARD_SOURCE_ROOT
@@ -184,6 +184,7 @@ function Get-DashboardConfig {
     $defaults = [ordered]@{
         displayTitle = '深圳战区 · 屹柯组'
         displaySubtitle = '教学数据展示系统'
+        serviceGroupName = ''
         workbookUrl = $dashboardUrl
         dingtalkConnectionUrl = ''
         hasDingtalkAccessKey = $false
@@ -205,7 +206,7 @@ function Get-DashboardConfig {
     if (Test-Path -LiteralPath $dashboardConfigFile) {
         try {
             $saved = Get-Content -LiteralPath $dashboardConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($name in @('displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
+            foreach ($name in @('serviceGroupName','displayTitle','displaySubtitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','renewalSheetId','nctWorkbookUrl','serviceWorkbookUrl','doubaoModelId','classes','excludedTeachers','comparisonTeachers','shareEnabled','shareTitle','portableMode')) {
                 if ($null -ne $saved.$name) { $defaults[$name] = $saved.$name }
             }
             $defaults.hasDingtalkAccessKey = -not [string]::IsNullOrWhiteSpace([string]$saved.dingtalkAccessKey)
@@ -240,6 +241,8 @@ function Save-DashboardConfig($bodyText) {
     foreach ($candidate in @($renewalWorkbook,$nctWorkbook,$serviceWorkbook)) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^https://alidocs\.dingtalk\.com/') { throw '续费、等考招考或教学服务文档链接格式不正确。' }
     }
+    $serviceGroupName=([string]$payload.serviceGroupName).Trim()
+    if ($serviceGroupName -and ($serviceGroupName -notmatch '组$' -or $serviceGroupName -match '[\r\n|｜·•]' -or $serviceGroupName.Length -gt 40)) { throw 'CRM小组名称应填写完整组名，例如：凌风踏浪组。' }
     $classes = @()
     foreach ($pair in @($payload.classes)) {
         if (@($pair).Count -lt 2) { throw '班级配置必须是“班级ID,主课期ID”。' }
@@ -267,6 +270,7 @@ function Save-DashboardConfig($bodyText) {
         if ($missing.Count -gt 0) { throw ('教学数据配置尚未完成，缺少：' + ($missing -join '、')) }
     }
     $config = [ordered]@{
+        serviceGroupName = $serviceGroupName
         displayTitle = ([string]$payload.displayTitle).Trim()
         displaySubtitle = ([string]$payload.displaySubtitle).Trim()
         workbookUrl = $workbook.Trim()
@@ -293,7 +297,7 @@ function Save-DashboardConfig($bodyText) {
     $share = [ordered]@{ enabled=$config.shareEnabled; accessKey=$shareKey; title=$config.shareTitle }
     [IO.File]::WriteAllText($shareConfigFile,($share | ConvertTo-Json -Depth 4),$utf8NoBom)
     $confirmed = Get-DashboardConfig
-    foreach ($field in @('displayTitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','serviceWorkbookUrl')) {
+    foreach ($field in @('serviceGroupName','displayTitle','workbookUrl','dingtalkConnectionUrl','renewalWorkbookUrl','serviceWorkbookUrl')) {
         if ([string]$confirmed.$field -cne [string]$config[$field]) { throw '配置回读校验失败，请保持配置窗口并重试；未启动数据更新。' }
     }
     Refresh-ConfigurationIdleStatuses
@@ -507,7 +511,7 @@ function Invoke-ScholarshipExtensionUpdate($bodyText) {
     if ([int]$parsed.renewalScope.version -ne 1 -or [string]$parsed.renewalScope.groupScope -ne 'all' -or
         [string]$parsed.renewalScope.region -ne '深圳战区' -or [string]$parsed.renewalScope.node -ne '首续' -or
         [string]$parsed.renewalScope.month -ne $renewalMonth) {
-        throw '续费采集范围未确认，已停止写入。请安装副本专用连接器1.6.80并刷新页面后重试。'
+        throw '续费采集范围未确认，已停止写入。请安装副本专用连接器1.6.81并刷新页面后重试。'
     }
     $sourceFile = Join-Path $root 'renewal-table-source.json'
     [IO.File]::WriteAllBytes($sourceFile,$bytes)

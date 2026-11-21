@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "编程猫副本工作台连接器",
-  "version": "1.6.80",
+  "version": "1.6.81",
   "description": "副本8766专用；手动更新；不访问主工作台8765。",
   "permissions": [
     "tabs",

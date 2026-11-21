@@ -30,9 +30,12 @@ const csvEscape=value=>{const text=value==null?"":String(value);return /[",\r\n]
 const matrixToCsv=matrix=>matrix.map(row=>row.map(csvEscape).join(",")).join("\r\n");
 
 function configuredServiceGroup(config={}){
+  const explicit=String(config.serviceGroupName||"").trim();
   const title=String(config.displayTitle||"").trim();
-  const group=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
-  if(!group.endsWith("组")||/[\r\n]/.test(group)||group.length>40)throw new Error("请在配置面板的工作台名称填写本组名称，例如：深圳战区 · 致远组");
+  const candidate=title.split(/[·•|｜]/).map(value=>value.trim()).filter(Boolean).at(-1)||"";
+  // Migrate known decorative title prefixes only; never guess a teacher/group alias.
+  const group=explicit||candidate.replace(/^(?:编程猫\s*)?(?:教学数据工作台|组内教学控制台|教学工作台|教学控制台)\s*[:：·—-]?\s*/,"");
+  if(!group.endsWith("组")||/[\r\n|｜·•]/.test(group)||group.length>40)throw new Error("请在配置面板的CRM小组名称填写完整组名，例如：凌风踏浪组");
   return group;
 }
 function scopeServiceData(data,group){

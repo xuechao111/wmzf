@@ -9,6 +9,14 @@ test('group follows saved panel title and never defaults to the main group',()=>
   assert.equal(configuredServiceGroup({displayTitle:title}),title.includes('木分')?'木分组':'致远组');
  for(const title of ['', '组内教学控制台','深圳战区'])assert.throws(()=>configuredServiceGroup({displayTitle:title}),/配置面板/);
 });
+test('the screenshot title decoration is removed and explicit CRM group takes precedence',()=>{
+ for(const title of ['教学数据工作台凌风踏浪组','教学数据工作台：凌风踏浪组','深圳战区 · 教学数据工作台凌风踏浪组'])
+  assert.equal(configuredServiceGroup({displayTitle:title}),'凌风踏浪组');
+ assert.equal(configuredServiceGroup({displayTitle:'任意封面标题',serviceGroupName:'凌风踏浪组'}),'凌风踏浪组');
+ assert.equal(configuredServiceGroup({displayTitle:'屹柯组',serviceGroupName:'致远组'}),'致远组');
+ assert.throws(()=>configuredServiceGroup({serviceGroupName:'A组|B组'}),/完整组名/);
+ assert.throws(()=>configuredServiceGroup({displayTitle:'教学数据工作台'}),/完整组名/);
+});
 test('old other-group cache is hidden in daily, multi-day and group totals',()=>{
  const wrong={小组:'屹柯组',老师:'Other',im:90};
  const result=scopeServiceData({updatedAt:'old',dates:['2026-11-14'],teachers:[wrong],groups:[wrong],today:{date:'2026-11-14',teachers:[wrong],groups:[wrong]}},'致远组');
