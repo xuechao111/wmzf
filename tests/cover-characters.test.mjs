@@ -14,8 +14,9 @@ function load(instance,store=new Map(),blocked=false){
  elements.coverThemeDialog.querySelectorAll=selector=>selector==='[data-character-thumb]'?thumbs:options;
  const localStorage={getItem:key=>{if(blocked)throw Error('blocked');return store.get(key)??null;},setItem:(key,value)=>{if(blocked)throw Error('blocked');store.set(key,value);}};
  const code=html.match(/<script id="cover-character-controls">([\s\S]*?)<\/script>/)[1];
- vm.runInNewContext(code,{document:{getElementById:id=>elements[id]},localStorage});
- return {elements,thumbs,options,code,select:key=>options.find(o=>o.dataset.coverCharacter===key).listeners.click()};
+ const styles={},root={dataset:{},style:{setProperty:(key,value)=>styles[key]=value}};
+ vm.runInNewContext(code,{document:{getElementById:id=>elements[id],documentElement:root,querySelectorAll:()=>[]},localStorage});
+ return {elements,thumbs,options,code,root,styles,select:key=>options.find(o=>o.dataset.coverCharacter===key).listeners.click()};
 }
 test('five local images can be chosen and the sixth option hides the character',()=>{
  for(const instance of Object.keys(pages)){
@@ -47,4 +48,17 @@ test('invalid preferences, disabled storage and failed images do not break the d
 });
 test('character changes never request CRM, document writes, or another instance',()=>{
  for(const instance of Object.keys(pages))assert.doesNotMatch(load(instance).code,/fetch\(|extensionRequest|postMessage|https?:\/\/|\/config/);
+});
+test('all pages share the selected character and hiding removes decorations everywhere',()=>{
+ for(const instance of Object.keys(pages)){
+  const h=load(instance);assert.equal(h.root.dataset.workspaceCharacter,'on');
+  h.select('graduate');assert.equal(h.styles['--workspace-character-image'],'url("'+h.elements.coverCharacterImage.src+'")');
+  h.select('none');assert.equal(h.root.dataset.workspaceCharacter,'off');assert.equal(h.styles['--workspace-character-image'],'none');
+  h.select('reader');assert.equal(h.root.dataset.workspaceCharacter,'on');
+  h.elements.coverCharacterImage.listeners.error();assert.equal(h.root.dataset.workspaceCharacter,'off');
+ }
+});
+test('visual changes preserve every existing data and workflow script',()=>{
+ // Decorative hooks must not target data cells, change sort order or install data observers.
+ for(const instance of Object.keys(pages))assert.doesNotMatch(load(instance).code,/\.team-table|tbody|MutationObserver|setInterval|\.sort\(/);
 });

@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.22-replica-v27-character-themes",
+  "version": "2026.11.22-replica-v28-workspace-themes",
   "connectorVersion": "1.6.81",
   "files": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "path": "bridge.ps1",
-      "sha256": "70c00e9fdf76c024973fe42caca334a0ecda3ee8d40ac7c250438cb64f3b2121"
+      "sha256": "7c6f77a2a6ac5f69c6ccac112e5e84d65fee913eb28314d92c5ea673c13c3985"
     },
     {
       "path": "broadcast_report.py",
@@ -92,7 +92,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "eb49ab0ab78eac5f43176016e6fc43c6c67edfb2b7bd19063e400d70c0375247"
+      "sha256": "c5c486cef75dff2e0336ebbbdb3578aa59d164a9b58790f6d950fb172eeea94d"
     },
     {
       "path": "launch-dashboard-hidden.vbs",
@@ -348,7 +348,7 @@
     },
     {
       "path": "使用说明.txt",
-      "sha256": "af38b8baaba3268b589cdfe1e7bd55a15409d1e13d9d8225652a718e7b59ea1a"
+      "sha256": "ab74fd45b6ffbd5146a4184f2f30239acc5bc38ff4b6435ace42c75f3d1cb845"
     },
     {
       "path": "修复副本更新失败.bat",
@@ -476,7 +476,7 @@
     },
     {
       "path": "tests/fixtures/main-cover.html",
-      "sha256": "aba1cecf5cc5af23dc7e6611cb673deeb744de59a3295eaf677fb61c7208a1c3"
+      "sha256": "13070de50b600cb9e739956443dc6036c6491c06c987dca1c74b150a5697b023"
     },
     {
       "path": "tests/self-update-entry.test.mjs",
@@ -484,7 +484,7 @@
     },
     {
       "path": "tests/cover-characters.test.mjs",
-      "sha256": "fd605184a0ec60074e11c53a669f10f5d959c4a0865f7847e84dfe1d5aad8a7d"
+      "sha256": "1403e55da8d3b7cc60a33e87a1623b691b582419a6c2807b43b9a24c6dca261d"
     }
   ],
   "instance": "replica",

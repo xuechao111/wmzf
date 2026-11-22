@@ -1030,6 +1030,36 @@ html[data-cover="original"] #page-home .cover-companion{background:#f3f6fa;borde
 @media(max-width:700px){#page-home .cover-companion{padding:10px;gap:12px}#page-home .cover-companion-art{flex-basis:70px;width:70px;height:76px}#page-home .cover-companion img{max-height:76px}#page-home .cover-companion-copy strong{font-size:14px}#page-home .cover-companion-copy p{font-size:11px}#page-home .cover-companion-change{padding:7px 9px;font-size:11px}}
 @media(max-width:440px){#page-home .cover-companion{flex-wrap:wrap}#page-home .cover-companion-change{margin-left:auto}#coverThemeDialog .cover-character-grid{gap:7px}#coverThemeDialog .cover-character-option img{height:52px}}
 </style>
+<style id="workspace-character-theme">
+:root{--workspace-bg:#e9ede6;--workspace-card:#f8faf5;--workspace-soft:#edf2e7;--workspace-line:#d5dfce;--workspace-ink:#2d4638;--workspace-muted:#58705c;--workspace-accent:#446b56;--workspace-strong:#35533f}
+html[data-cover="sand"]{--workspace-bg:#eeebe4;--workspace-card:#fbf9f2;--workspace-soft:#f1ebdc;--workspace-line:#dfd2ba;--workspace-ink:#514333;--workspace-muted:#75634d;--workspace-accent:#796145;--workspace-strong:#604a31}
+html[data-cover="mist"]{--workspace-bg:#e8edf0;--workspace-card:#f5f9fa;--workspace-soft:#e7f0f5;--workspace-line:#cfdee5;--workspace-ink:#2c4755;--workspace-muted:#546f7d;--workspace-accent:#476a7c;--workspace-strong:#355668}
+html:not([data-cover="original"]) [data-composition-id="teaching-console"]{background:var(--workspace-bg)}
+html:not([data-cover="original"]) :is(#page-data,#page-service,#page-ai,#page-nct){background:var(--workspace-bg);color:var(--workspace-ink)}
+html:not([data-cover="original"]) :is(#page-data,#page-service,#page-ai,#page-nct)::before{background:none;filter:none}
+html:not([data-cover="original"]) :is(.topbar,.data-head,.team-board-head,.abnormal-board-head,.service-daily-head,.nct-head){background:var(--workspace-card);border-color:var(--workspace-line);box-shadow:0 5px 18px #243d2d08}
+html:not([data-cover="original"]) :is(.nav,.data-groups,.tabs){background:var(--workspace-soft)}
+html:not([data-cover="original"]) :is(.nav-btn,.tab,.data-group-btn){color:var(--workspace-muted)}
+html:not([data-cover="original"]) :is(.nav-btn.active,.tab.active,.cohort-btn.active){background:var(--workspace-accent);color:#fff;border-color:var(--workspace-accent)}
+html:not([data-cover="original"]) :is(.data-head h2,.team-board-head h3,.abnormal-board-head strong,.ai-compose h2,.ai-results h2,.nct-head h2){color:var(--workspace-ink)}
+html:not([data-cover="original"]) :is(.team-kpi,.overview-kpis>div,.a-stat,.service-kpi,.service-daily-kpis>div,.ai-compose,.ai-results,.nct-panel,.service-daily,.service-section){background:var(--workspace-card);border-color:var(--workspace-line);box-shadow:0 4px 14px #243d2d07}
+html:not([data-cover="original"]) :is(.team-kpi,.overview-kpis>div,.a-stat,.service-kpi,.service-daily-kpis>div){border-top:3px solid var(--workspace-line)}
+html:not([data-cover="original"]) :is(.team-kpi,.overview-kpis>div,.service-kpi,.service-daily-kpis>div):nth-child(even){background:var(--workspace-soft)}
+html:not([data-cover="original"]) :is(.team-table thead th,.overview-table thead th,.service-table thead th){background:var(--workspace-strong);color:#fff}
+html:not([data-cover="original"]) :is(.overview-filter,.service-standard,.service-table-controls,.table-tools,.ai-table-wrap){background:var(--workspace-card);border-color:var(--workspace-line)}
+html:not([data-cover="original"]) :is(.data-head,.ai-compose,.nct-head) .small-btn.red{background:var(--workspace-accent);border-color:var(--workspace-accent)}
+/* Decorative artwork lives outside data cells and never intercepts clicks. */
+html[data-workspace-character="on"] :is(.data-head h2,.team-board-head h3,.abnormal-board-head strong,.service-daily-head h3,.ai-compose h2,.ai-results h2,.nct-head h2)::before{content:"";display:inline-block;width:38px;height:38px;margin-right:9px;vertical-align:middle;background:#fff var(--workspace-character-image) center/contain no-repeat;border-radius:10px;border:1px solid #dde4d9;pointer-events:none}
+html[data-workspace-character="on"] .team-board-head h3::before{width:44px;height:44px}
+html[data-workspace-character="on"] :is(.team-kpi,.overview-kpis>div,.a-stat,.service-kpi,.service-daily-kpis>div){position:relative;isolation:isolate}
+html[data-workspace-character="on"] :is(.team-kpi,.overview-kpis>div,.a-stat,.service-kpi,.service-daily-kpis>div)::after{content:"";position:absolute;right:9px;top:50%;transform:translateY(-50%);width:34px;height:38px;background:var(--workspace-character-image) center/contain no-repeat;border-radius:8px;opacity:.12;pointer-events:none;z-index:-1}
+.workspace-theme-shortcut{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--workspace-line);border-radius:12px;background:var(--workspace-card);color:var(--workspace-ink);padding:8px 11px;font-family:inherit;font-size:12px;font-weight:600;line-height:1.4;cursor:pointer;white-space:nowrap}
+.workspace-theme-shortcut:focus-visible{outline:3px solid var(--workspace-accent);outline-offset:3px}
+.ai-compose h2 .workspace-theme-shortcut{float:right;margin-left:12px}
+@media(max-width:1366px){html[data-workspace-character="on"] #page-data.overview-mode :is(.data-head h2,.team-board-head h3,.abnormal-board-head strong)::before{width:27px;height:27px;margin-right:6px}html[data-workspace-character="on"] #page-data.overview-mode .overview-kpis>div::after{width:22px;height:26px;right:5px}}
+@media(max-width:700px){html[data-workspace-character="on"] :is(.data-head h2,.team-board-head h3,.abnormal-board-head strong,.service-daily-head h3,.ai-compose h2,.ai-results h2,.nct-head h2)::before{width:27px;height:27px;margin-right:6px}.workspace-theme-shortcut{padding:7px;font-size:11px}.ai-compose h2 .workspace-theme-shortcut{float:none;margin:8px 0 0}}
+@media(prefers-reduced-motion:reduce){.workspace-theme-shortcut{transition:none}}
+</style>
 </head>
 <body>
 <main data-composition-id="teaching-console" data-width="1440" data-height="900" data-start="0" data-duration="8" data-track-index="0">
@@ -1584,8 +1614,8 @@ $('#liveDataUpdateBtn').onclick=updateAll;$('#updateBtn').onclick=updateAll;$('#
   (()=>{const button=document.querySelector('#aiSubmit');if(!button)return;button.onclick=async()=>{const status=document.querySelector('#aiStatus'),question=document.querySelector('#aiQuestion').value.trim();if(!question){status.textContent='请先输入问题';return}button.disabled=true;status.textContent='豆包正在读取看板并分析，通常需要 10–60 秒…';try{await json('/ai-ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question}),timeoutMs:135000});status.textContent='分析完成，反馈已写入“屹柯完课展示”';document.querySelector('#aiQuestion').value='';await json('/ai-feedback',{timeoutMs:15000}).then(data=>{const target=document.querySelector('#aiFeedbackTable');target.innerHTML=(data.rows||[]).length?`<table class="ai-table"><thead><tr><th>分析时间</th><th>问题</th><th>豆包反馈</th><th>模型</th></tr></thead><tbody>${data.rows.map(row=>`<tr><td>${esc(row.time)}</td><td>${esc(row.question)}</td><td><div class="ai-feedback-text">${esc(row.feedback)}</div></td><td>${esc(row.model)}</td></tr>`).join('')}</tbody></table>`:'<div class="ai-empty">暂无分析反馈</div>'})}catch(e){status.textContent=e.message}finally{button.disabled=false}}})();
 </script>
 <dialog id="coverThemeDialog" aria-labelledby="coverThemeTitle" aria-describedby="coverThemeDescription">
-<div class="cover-dialog-head"><h2 id="coverThemeTitle">选择封面主题</h2><button type="button" id="coverThemeClose" class="cover-close" aria-label="关闭主题选择">×</button></div>
-<p id="coverThemeDescription">选择后立即生效，自动记住当前看板的外观。</p>
+<div class="cover-dialog-head"><h2 id="coverThemeTitle">选择工作台主题</h2><button type="button" id="coverThemeClose" class="cover-close" aria-label="关闭主题选择">×</button></div>
+<p id="coverThemeDescription">配色和角色应用到各个页面，自动记住当前看板的选择。</p>
 <div class="cover-theme-grid" role="group" aria-label="可选主题">
 <button type="button" class="cover-choice" data-cover-choice="calm" aria-pressed="false"><span class="cover-sample" aria-hidden="true" style="--sample-bg:#e9ede6;--sample-accent:#446b56"><i></i><i></i></span><strong>柔和绿</strong><small>当前保留的舒适配色</small></button>
 <button type="button" class="cover-choice" data-cover-choice="sand" aria-pressed="false"><span class="cover-sample" aria-hidden="true" style="--sample-bg:#eeebe4;--sample-accent:#796145"><i></i><i></i></span><strong>暖沙米</strong><small>温暖柔和 · 低饱和</small></button>
@@ -1608,11 +1638,14 @@ if(!panel||!dialog||!image||!title||!note||!status)return;
 let selected='champion';try{const saved=localStorage.getItem(key);if(saved==='none'||Object.hasOwn(images,saved))selected=saved;}catch{}
 for(const thumb of dialog.querySelectorAll('[data-character-thumb]')){const asset=images[thumb.dataset.characterThumb];if(asset)thumb.src=asset.image;}
 const render=()=>{const asset=images[selected];panel.hidden=selected==='none';
+document.documentElement.dataset.workspaceCharacter=asset?'on':'off';document.documentElement.style.setProperty('--workspace-character-image',asset?'url("'+asset.image+'")':'none');
 if(asset){image.src=asset.image;image.alt=asset.name;title.textContent=asset.title;note.textContent=asset.note;}
 for(const option of dialog.querySelectorAll('[data-cover-character]'))option.setAttribute('aria-pressed',String(option.dataset.coverCharacter===selected));
 status.textContent='当前角色：'+(asset?asset.name:'已隐藏');};
 for(const option of dialog.querySelectorAll('[data-cover-character]'))option.addEventListener('click',()=>{const choice=option.dataset.coverCharacter;if(choice!=='none'&&!Object.hasOwn(images,choice))return;selected=choice;try{localStorage.setItem(key,choice)}catch{}render();});
 document.getElementById('coverCharacterChange')?.addEventListener('click',()=>{dialog.showModal();dialog.querySelector('[data-cover-character="'+selected+'"]')?.focus();});
-image.addEventListener('error',()=>{panel.hidden=true;status.textContent='角色图片暂不可用，可选择其他角色。';});render();})();
+image.addEventListener('error',()=>{panel.hidden=true;document.documentElement.dataset.workspaceCharacter='off';document.documentElement.style.setProperty('--workspace-character-image','none');status.textContent='角色图片暂不可用，可选择其他角色。';});
+for(const toolbar of document.querySelectorAll('.page:not(#page-home) .head-actions,.ai-compose h2')){const shortcut=document.createElement('button');shortcut.type='button';shortcut.className='workspace-theme-shortcut';shortcut.textContent='主题外观';shortcut.setAttribute('aria-haspopup','dialog');shortcut.setAttribute('aria-controls','coverThemeDialog');shortcut.addEventListener('click',()=>dialog.showModal());toolbar.appendChild(shortcut);}
+render();})();
 </script>
 </body></html>
